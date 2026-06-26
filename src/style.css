@@ -182,6 +182,8 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
   display: flex; align-items: center; justify-content: center;
   pointer-events: none;
 }
+/* El id gana al [hidden] del navegador; hay que ocultarlo explícitamente. */
+#drop-overlay[hidden] { display: none; }
 .drop-inner {
   border: 2px dashed var(--accent); border-radius: var(--radius);
   background: var(--panel); padding: 40px 60px; text-align: center;
