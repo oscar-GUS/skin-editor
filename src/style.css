@@ -97,6 +97,40 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .swatch:hover { border-color: var(--text-sec); transform: scale(1.08); }
 
+/* ── Colores recientes ──────────────────────────── */
+.recents-wrap { display: flex; flex-direction: column; gap: 6px; }
+.recents-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+.recents { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
+.recent {
+  width: 100%; aspect-ratio: 1; padding: 0;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent;
+}
+.recent.filled:hover { border-color: var(--text-sec); transform: scale(1.1); }
+.recent.empty { cursor: default; opacity: 0.4; background:
+  repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 8px 8px; }
+
+/* ── Panel de imagen de referencia ──────────────── */
+#ref-panel {
+  position: absolute; right: 12px; bottom: 12px; z-index: 5;
+  width: min(240px, 45%);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  display: flex; flex-direction: column;
+}
+.ref-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 8px 6px 10px; font-size: 11px; color: var(--text-sec);
+  border-bottom: 1px solid var(--border); user-select: none;
+}
+#ref-close { padding: 2px 7px; font-size: 12px; line-height: 1; border-radius: 4px; }
+#ref-canvas {
+  display: block; width: 100%; height: auto; max-height: 220px;
+  object-fit: contain; image-rendering: pixelated; cursor: crosshair;
+  background: repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 12px 12px;
+}
+
 .canvas-wrap {
   background: #0f0f12;
   border: 1px solid var(--border);
@@ -139,7 +173,7 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .seg button.active { background: var(--accent); color: #fff; }
 
 #viewer { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
-#viewer canvas { display: block; position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; }
+#viewer > canvas { display: block; position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; }
 
 @media (max-width: 820px) {
   .layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }

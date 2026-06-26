@@ -103,7 +103,7 @@ function paintFromEvent(e: PointerEvent) {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (!paint3d) return;
+  if (!paint3d || e.button !== 0) return;   // pintar solo con izquierdo; derecho = orbitar
   if (editor.tool !== 'eyedropper') editor.pushUndo();
   painting3d = editor.tool !== 'eyedropper' && editor.tool !== 'fill';
   paintFromEvent(e);
@@ -132,12 +132,50 @@ document.querySelectorAll<HTMLButtonElement>('.tool').forEach(btn => {
   });
 });
 
-// color
-const colorInput = document.getElementById('color') as HTMLInputElement;
-colorInput.addEventListener('input', () => { editor.color = colorInput.value; });
-editor.onColorPick = (hex) => { editor.color = hex; colorInput.value = hex; };
+// ── Colores recientes (10 slots; el último usado primero) ────────────────────
+const RECENTS_MAX = 10;
+const recents: string[] = [];
+const recentsEl = document.getElementById('recents')!;
+function addRecent(hex: string) {
+  hex = hex.toLowerCase();
+  const i = recents.indexOf(hex);
+  if (i !== -1) recents.splice(i, 1);
+  recents.unshift(hex);
+  if (recents.length > RECENTS_MAX) recents.length = RECENTS_MAX;
+  renderRecents();
+}
+function renderRecents() {
+  recentsEl.replaceChildren();
+  for (let i = 0; i < RECENTS_MAX; i++) {
+    const hex = recents[i];
+    const b = document.createElement('button');
+    if (hex) {
+      b.className = 'recent filled';
+      b.style.background = hex;
+      b.title = hex;
+      b.addEventListener('click', () => setColor(hex, false));
+    } else {
+      b.className = 'recent empty';
+      b.disabled = true;
+    }
+    recentsEl.appendChild(b);
+  }
+}
+renderRecents();
 
-// swatches
+// ── Color (selector de cualquier color) ──────────────────────────────────────
+const colorInput = document.getElementById('color') as HTMLInputElement;
+function setColor(hex: string, recent = true) {
+  hex = hex.toLowerCase();
+  editor.color = hex;
+  colorInput.value = hex;
+  if (recent) addRecent(hex);
+}
+colorInput.addEventListener('input', () => setColor(colorInput.value));
+editor.onColorPick = (hex) => setColor(hex);   // cuentagotas (2D / 3D)
+editor.onUse = (hex) => addRecent(hex);         // lápiz / relleno
+
+// swatches base
 const PALETTE = ['#A97C50', '#5A3A21', '#3A7E7E', '#3A467E', '#2A2A30', '#E8E8E8',
   '#C0392B', '#27AE60', '#F2AF0D', '#F4811F', '#8E44AD', '#000000'];
 const swatches = document.getElementById('swatches')!;
@@ -145,7 +183,7 @@ for (const hex of PALETTE) {
   const s = document.createElement('button');
   s.className = 'swatch';
   s.style.background = hex;
-  s.addEventListener('click', () => { editor.color = hex; colorInput.value = hex; });
+  s.addEventListener('click', () => setColor(hex));
   swatches.appendChild(s);
 }
 
@@ -171,14 +209,18 @@ outerChk.addEventListener('change', () => { outerVisible = outerChk.checked; mod
 const grid3dChk = document.getElementById('grid3d') as HTMLInputElement;
 grid3dChk.addEventListener('change', () => { gridVisible = grid3dChk.checked; model.setGridVisible(gridVisible); });
 
-// paint in 3D
+// paint in 3D — al pintar, el izquierdo pinta y el derecho orbita el modelo.
+const DEFAULT_BTN = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+const PAINT_BTN = { LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 const paint3dChk = document.getElementById('paint3d') as HTMLInputElement;
 paint3dChk.addEventListener('change', () => {
   paint3d = paint3dChk.checked;
-  controls.enableRotate = !paint3d;
+  controls.enableRotate = true;            // siempre se puede orbitar (con el botón asignado)
   controls.enablePan = !paint3d;
+  controls.mouseButtons = paint3d ? PAINT_BTN : DEFAULT_BTN;
   renderer.domElement.style.cursor = paint3d ? 'crosshair' : '';
 });
+renderer.domElement.addEventListener('contextmenu', (e) => { if (paint3d) e.preventDefault(); });
 
 // import
 const importInput = document.getElementById('import') as HTMLInputElement;
@@ -206,4 +248,42 @@ document.getElementById('export-btn')!.addEventListener('click', () => {
   a.download = 'skin.png';
   a.href = source.toDataURL('image/png');
   a.click();
+});
+
+// ── Imagen de referencia (abajo-derecha) para sacar colores con el cuentagotas ──
+const refPanel = document.getElementById('ref-panel')!;
+const refCanvas = document.getElementById('ref-canvas') as HTMLCanvasElement;
+const refCtx = refCanvas.getContext('2d', { willReadFrequently: true })!;
+const importImageInput = document.getElementById('import-image') as HTMLInputElement;
+
+document.getElementById('import-img-btn')!.addEventListener('click', () => importImageInput.click());
+importImageInput.addEventListener('change', () => {
+  const file = importImageInput.files?.[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    const cap = 512; // resolución interna acotada; se muestra escalada por CSS
+    const sc = Math.min(1, cap / Math.max(img.width, img.height));
+    refCanvas.width = Math.max(1, Math.round(img.width * sc));
+    refCanvas.height = Math.max(1, Math.round(img.height * sc));
+    refCtx.imageSmoothingEnabled = false;
+    refCtx.clearRect(0, 0, refCanvas.width, refCanvas.height);
+    refCtx.drawImage(img, 0, 0, refCanvas.width, refCanvas.height);
+    refPanel.hidden = false;
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(file);
+  importImageInput.value = '';
+});
+document.getElementById('ref-close')!.addEventListener('click', () => { refPanel.hidden = true; });
+
+// Clic en la imagen de referencia = cuentagotas (siempre toma el color).
+refCanvas.addEventListener('pointerdown', (e) => {
+  const rect = refCanvas.getBoundingClientRect();
+  const x = Math.floor(((e.clientX - rect.left) / rect.width) * refCanvas.width);
+  const y = Math.floor(((e.clientY - rect.top) / rect.height) * refCanvas.height);
+  if (x < 0 || y < 0 || x >= refCanvas.width || y >= refCanvas.height) return;
+  const d = refCtx.getImageData(x, y, 1, 1).data;
+  if (d[3] === 0) return;
+  setColor('#' + [d[0], d[1], d[2]].map(v => v.toString(16).padStart(2, '0')).join(''));
 });

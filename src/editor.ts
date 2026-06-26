@@ -20,6 +20,7 @@ export class SkinEditor {
 
   onChange: () => void = () => {};
   onColorPick: (hex: string) => void = () => {};
+  onUse: (hex: string) => void = () => {};   // color aplicado (lápiz/relleno) -> recientes
 
   constructor(source: HTMLCanvasElement, display: HTMLCanvasElement) {
     this.source = source;
@@ -74,9 +75,11 @@ export class SkinEditor {
       this.sctx.clearRect(x, y, 1, 1);
     } else if (this.tool === 'fill') {
       this.floodFill(x, y);
+      this.onUse(this.color);
     } else {
       this.sctx.fillStyle = this.color;
       this.sctx.fillRect(x, y, 1, 1);
+      this.onUse(this.color);
     }
     this.onChange();
     this.render();

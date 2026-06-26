@@ -15,8 +15,10 @@
     </div>
     <div class="header-actions">
       <input type="file" id="import" accept="image/png" hidden>
-      <button id="import-btn">Importar PNG</button>
-      <button id="export-btn" class="primary">Exportar PNG</button>
+      <input type="file" id="import-image" accept="image/*" hidden>
+      <button id="import-img-btn">Importar imagen</button>
+      <button id="import-btn">Importar Skin</button>
+      <button id="export-btn" class="primary">Exportar Skin</button>
     </div>
   </header>
 
@@ -30,8 +32,13 @@
       </div>
 
       <div class="color-row">
-        <input type="color" id="color" value="#A97C50">
+        <input type="color" id="color" value="#A97C50" title="Elegir cualquier color">
         <div class="swatches" id="swatches"></div>
+      </div>
+
+      <div class="recents-wrap">
+        <span class="recents-label">Recientes</span>
+        <div class="recents" id="recents"></div>
       </div>
 
       <div class="canvas-wrap">
@@ -51,7 +58,15 @@
         <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
         <label class="check"><input type="checkbox" id="paint3d"> Pintar en 3D</label>
       </div>
-      <div id="viewer"></div>
+      <div id="viewer">
+        <div id="ref-panel" hidden>
+          <div class="ref-head">
+            <span>Referencia · cuentagotas</span>
+            <button id="ref-close" title="Quitar imagen">✕</button>
+          </div>
+          <canvas id="ref-canvas"></canvas>
+        </div>
+      </div>
     </main>
   </div>
 
