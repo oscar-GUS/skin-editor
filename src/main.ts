@@ -222,12 +222,8 @@ paint3dChk.addEventListener('change', () => {
 });
 renderer.domElement.addEventListener('contextmenu', (e) => { if (paint3d) e.preventDefault(); });
 
-// import
-const importInput = document.getElementById('import') as HTMLInputElement;
-document.getElementById('import-btn')!.addEventListener('click', () => importInput.click());
-importInput.addEventListener('change', () => {
-  const file = importInput.files?.[0];
-  if (!file) return;
+// import — carga un PNG como skin (lo dibuja a 64×64 en el canvas fuente).
+function loadSkin(file: File) {
   const img = new Image();
   img.onload = () => {
     const ctx = source.getContext('2d')!;
@@ -239,6 +235,12 @@ importInput.addEventListener('change', () => {
     URL.revokeObjectURL(img.src);
   };
   img.src = URL.createObjectURL(file);
+}
+const importInput = document.getElementById('import') as HTMLInputElement;
+document.getElementById('import-btn')!.addEventListener('click', () => importInput.click());
+importInput.addEventListener('change', () => {
+  const file = importInput.files?.[0];
+  if (file) loadSkin(file);
   importInput.value = '';
 });
 
@@ -286,4 +288,28 @@ refCanvas.addEventListener('pointerdown', (e) => {
   const d = refCtx.getImageData(x, y, 1, 1).data;
   if (d[3] === 0) return;
   setColor('#' + [d[0], d[1], d[2]].map(v => v.toString(16).padStart(2, '0')).join(''));
+});
+
+// ── Drag & drop: soltar una skin (imagen) sobre la página la carga ────────────
+const dropOverlay = document.getElementById('drop-overlay')!;
+let dragDepth = 0;
+const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
+window.addEventListener('dragenter', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropOverlay.hidden = false;
+});
+window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', (e) => {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlay.hidden = true;
+});
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  dropOverlay.hidden = true;
+  const file = Array.from(e.dataTransfer?.files ?? []).find(f => f.type.startsWith('image/'));
+  if (file) loadSkin(file);
 });
