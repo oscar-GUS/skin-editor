@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skin Editor — MineLite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <div class="title-group">
+      <h1>Skin Editor</h1>
+      <span>Minecraft · Java 64×64</span>
+    </div>
+    <div class="header-actions">
+      <input type="file" id="import" accept="image/png" hidden>
+      <button id="import-btn">Importar PNG</button>
+      <button id="export-btn" class="primary">Exportar PNG</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="editor-pane">
+      <div class="tools">
+        <button data-tool="pencil" class="tool active" title="Lápiz">✏️</button>
+        <button data-tool="eraser" class="tool" title="Borrador">🧽</button>
+        <button data-tool="eyedropper" class="tool" title="Cuentagotas">💧</button>
+        <button data-tool="fill" class="tool" title="Relleno">🪣</button>
+      </div>
+
+      <div class="color-row">
+        <input type="color" id="color" value="#A97C50">
+        <div class="swatches" id="swatches"></div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="editor"></canvas>
+      </div>
+
+      <label class="check"><input type="checkbox" id="grid" checked> Cuadrícula</label>
+    </aside>
+
+    <main class="viewer-pane">
+      <div class="viewer-toolbar">
+        <div class="seg" id="model-toggle">
+          <button data-model="steve" class="active">Steve</button>
+          <button data-model="alex">Alex</button>
+        </div>
+        <label class="check"><input type="checkbox" id="layer-outer" checked> Capa exterior</label>
+        <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
+        <label class="check"><input type="checkbox" id="paint3d"> Pintar en 3D</label>
+      </div>
+      <div id="viewer"></div>
+    </main>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
