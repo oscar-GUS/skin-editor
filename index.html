@@ -21,27 +21,96 @@
   </header>
 
   <div class="layout">
-    <aside class="editor-pane">
-      <div class="tools">
+
+    <!-- ── COLUMNA IZQUIERDA: Capas ─────────────────────────────────── -->
+    <aside class="col col-left">
+      <div class="layers-wrap">
+        <div class="section-head">
+          <span class="recents-label">Capas</span>
+          <button id="layer-add" class="mini-btn">+ Capa</button>
+        </div>
+        <div class="layers" id="layers"></div>
+      </div>
+
+      <div class="skinbase-wrap">
+        <span class="recents-label">Skin base</span>
+        <div class="skinbase-row" id="skin-presets">
+          <button data-skin="steve" class="active">Steve</button>
+          <button id="skin-upload">Subir la tuya</button>
+        </div>
+        <button id="skin-reset">Resetear a la base</button>
+      </div>
+
+      <div class="editor2d-wrap">
+        <span class="recents-label">Textura 2D</span>
+        <div class="canvas-wrap">
+          <canvas id="editor"></canvas>
+        </div>
+        <label class="check"><input type="checkbox" id="grid" checked> Cuadrícula</label>
+      </div>
+
+      <button id="import-img-btn" class="full-btn">Importar imagen de referencia</button>
+    </aside>
+
+    <!-- ── COLUMNA CENTRO: Vista 3D ─────────────────────────────────── -->
+    <main class="col col-center">
+      <div class="viewer-toolbar">
+        <div class="tb-group">
+          <span class="tb-label">Brazos</span>
+          <div class="seg" id="model-toggle" title="Ancho de brazos">
+            <button data-model="steve" class="active">Normal</button>
+            <button data-model="alex">Finos</button>
+          </div>
+        </div>
+        <label class="check pose-field">Pose
+          <select id="pose">
+            <option value="reposo">Reposo</option>
+            <option value="andar">Andar</option>
+            <option value="correr">Correr</option>
+            <option value="saludar">Saludar</option>
+            <option value="sentado">Sentado</option>
+            <option value="tpose">T-pose</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
+      </div>
+
+      <div id="viewer">
+        <!-- HUD de partes (abajo-izquierda): elegir qué se ve + capa interna/externa -->
+        <div id="parts-hud" class="parts-hud" title="Partes visibles">
+          <svg viewBox="0 0 60 90" class="hud-svg">
+            <rect data-part="head"     class="hud-part active" x="22" y="2"  width="16" height="16" rx="2"/>
+            <rect data-part="rightArm" class="hud-part active" x="7"  y="20" width="10" height="26" rx="2"/>
+            <rect data-part="body"     class="hud-part active" x="20" y="20" width="20" height="26" rx="2"/>
+            <rect data-part="leftArm"  class="hud-part active" x="43" y="20" width="10" height="26" rx="2"/>
+            <rect data-part="rightLeg" class="hud-part active" x="21" y="48" width="8"  height="30" rx="2"/>
+            <rect data-part="leftLeg"  class="hud-part active" x="31" y="48" width="8"  height="30" rx="2"/>
+          </svg>
+          <div class="seg hud-layer" id="layer-toggle" title="Capa visible">
+            <button data-layer="inner">Interna</button>
+            <button data-layer="outer" class="active">Externa</button>
+          </div>
+        </div>
+
+        <div id="ref-panel" hidden>
+          <div class="ref-head">
+            <span>Referencia · cuentagotas</span>
+            <button id="ref-close" title="Quitar imagen">✕</button>
+          </div>
+          <canvas id="ref-canvas"></canvas>
+        </div>
+      </div>
+    </main>
+
+    <!-- ── COLUMNA DERECHA: Pinceles · Ajustes · Colores ────────────── -->
+    <aside class="col col-right">
+      <div class="tools" id="tools">
         <button data-tool="pencil" class="tool active" title="Lápiz">✏️</button>
         <button data-tool="eraser" class="tool" title="Borrador">🧽</button>
         <button data-tool="eyedropper" class="tool" title="Cuentagotas">💧</button>
         <button data-tool="fill" class="tool" title="Relleno">🪣</button>
-      </div>
-
-      <div class="color-row">
-        <input type="color" id="color" value="#A97C50" title="Elegir cualquier color">
-        <div class="swatches" id="swatches"></div>
-      </div>
-
-      <div class="recents-wrap">
-        <span class="recents-label">Recientes</span>
-        <div class="recents" id="recents"></div>
-      </div>
-
-      <div class="recents-wrap">
-        <span class="recents-label">Colores en la skin</span>
-        <div class="skin-colors" id="skin-colors"></div>
+        <button data-tool="gradient" class="tool" title="Degradado (A → B)">🌈</button>
+        <button data-tool="select" class="tool" title="Seleccionar zona">⬚</button>
       </div>
 
       <div class="brush-panel">
@@ -50,9 +119,9 @@
           <input type="range" id="brush-size" min="1" max="8" step="1" value="1">
           <span id="brush-size-val">1 px</span>
         </label>
-        <label class="slider-row">Densidad
-          <input type="range" id="brush-density" min="10" max="100" step="5" value="100">
-          <span id="brush-density-val">100%</span>
+        <label class="slider-row">Difuminado
+          <input type="range" id="brush-density" min="0" max="100" step="5" value="0">
+          <span id="brush-density-val">0%</span>
         </label>
         <label class="slider-row">Opacidad
           <input type="range" id="brush-opacity" min="5" max="100" step="5" value="100">
@@ -71,75 +140,31 @@
         </div>
       </div>
 
-      <div class="canvas-wrap">
-        <canvas id="editor"></canvas>
-      </div>
-
-      <label class="check"><input type="checkbox" id="grid" checked> Cuadrícula</label>
-
-      <div class="layers-wrap">
-        <div class="section-head">
-          <span class="recents-label">Capas</span>
-          <button id="layer-add" class="mini-btn">+ Capa</button>
+      <!-- Degradado: colores A y B (visible solo con la herramienta degradado) -->
+      <div class="grad-panel" id="grad-panel" hidden>
+        <span class="recents-label">Degradado</span>
+        <div class="grad-row">
+          <label>A <input type="color" id="grad-a" value="#A97C50"></label>
+          <label>B <input type="color" id="grad-b" value="#3A467E"></label>
         </div>
-        <div class="layers" id="layers"></div>
       </div>
 
-      <div class="skinbase-wrap">
-        <span class="recents-label">Skin base</span>
-        <div class="skinbase-row" id="skin-presets">
-          <button data-skin="steve" class="active">Steve</button>
-          <button id="skin-upload">Subir la tuya</button>
-        </div>
-        <button id="skin-reset">Resetear a la base</button>
+      <div class="color-row">
+        <input type="color" id="color" value="#A97C50" title="Elegir cualquier color">
+        <div class="swatches" id="swatches"></div>
       </div>
 
-      <button id="import-img-btn" class="full-btn">Importar imagen de referencia</button>
+      <div class="recents-wrap">
+        <span class="recents-label">Recientes</span>
+        <div class="recents" id="recents"></div>
+      </div>
+
+      <div class="recents-wrap">
+        <span class="recents-label">Colores en la skin</span>
+        <div class="skin-colors" id="skin-colors"></div>
+      </div>
     </aside>
 
-    <main class="viewer-pane">
-      <div class="viewer-toolbar">
-        <div class="tb-group">
-          <span class="tb-label">Brazos</span>
-          <div class="seg" id="model-toggle" title="Ancho de brazos">
-            <button data-model="steve" class="active">Normal</button>
-            <button data-model="alex">Finos</button>
-          </div>
-        </div>
-        <div class="tb-group">
-          <label class="check"><input type="checkbox" id="layer-outer" checked> Capa ext.</label>
-          <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula</label>
-        </div>
-        <label class="check pose-field">Pose
-          <select id="pose">
-            <option value="reposo">Reposo</option>
-            <option value="andar">Andar</option>
-            <option value="correr">Correr</option>
-            <option value="saludar">Saludar</option>
-            <option value="sentado">Sentado</option>
-            <option value="tpose">T-pose</option>
-          </select>
-        </label>
-        <div class="parts tb-group" id="parts" title="Mostrar/ocultar partes">
-          <span class="tb-label">Partes</span>
-          <button data-part="head" class="active">Cabeza</button>
-          <button data-part="body" class="active">Torso</button>
-          <button data-part="leftArm" class="active">Brazo I</button>
-          <button data-part="rightArm" class="active">Brazo D</button>
-          <button data-part="leftLeg" class="active">Pierna I</button>
-          <button data-part="rightLeg" class="active">Pierna D</button>
-        </div>
-      </div>
-      <div id="viewer">
-        <div id="ref-panel" hidden>
-          <div class="ref-head">
-            <span>Referencia · cuentagotas</span>
-            <button id="ref-close" title="Quitar imagen">✕</button>
-          </div>
-          <canvas id="ref-canvas"></canvas>
-        </div>
-      </div>
-    </main>
   </div>
 
   <div id="drop-overlay" hidden>

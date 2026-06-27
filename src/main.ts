@@ -189,11 +189,13 @@ window.addEventListener('keydown', (e) => {
 });
 
 // tools
+const gradPanel = document.getElementById('grad-panel')!;
 document.querySelectorAll<HTMLButtonElement>('.tool').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     editor.tool = btn.dataset.tool as Tool;
+    gradPanel.hidden = btn.dataset.tool !== 'gradient';   // colores A/B solo con degradado
   });
 });
 
@@ -267,7 +269,7 @@ brushSizeInput.addEventListener('input', () => {
 const brushDensityInput = document.getElementById('brush-density') as HTMLInputElement;
 const brushDensityVal = document.getElementById('brush-density-val')!;
 brushDensityInput.addEventListener('input', () => {
-  editor.brushDensity = +brushDensityInput.value / 100;
+  editor.feather = +brushDensityInput.value / 100;   // difuminado
   brushDensityVal.textContent = brushDensityInput.value + '%';
 });
 
@@ -443,9 +445,15 @@ document.querySelectorAll<HTMLButtonElement>('#model-toggle button').forEach(btn
   btn.addEventListener('click', () => setSlim(btn.dataset.model === 'alex'));
 });
 
-// outer layer (capa exterior del 3D)
-const outerChk = document.getElementById('layer-outer') as HTMLInputElement;
-outerChk.addEventListener('change', () => { outerVisible = outerChk.checked; model.setOuterVisible(outerVisible); });
+// capa visible (interna / externa) — en el HUD del visor
+document.querySelectorAll<HTMLButtonElement>('#layer-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#layer-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    outerVisible = btn.dataset.layer === 'outer';
+    model.setOuterVisible(outerVisible);
+  });
+});
 
 // 3D grid
 const grid3dChk = document.getElementById('grid3d') as HTMLInputElement;
@@ -455,13 +463,13 @@ grid3dChk.addEventListener('change', () => { gridVisible = grid3dChk.checked; mo
 const poseSel = document.getElementById('pose') as HTMLSelectElement;
 poseSel.addEventListener('change', () => { pose = poseSel.value as PoseName; model.setPose(pose); });
 
-// mostrar/ocultar partes del cuerpo (para pintar interiores, etc.)
-document.querySelectorAll<HTMLButtonElement>('#parts button').forEach(btn => {
-  const name = btn.dataset.part as PartName;
+// mostrar/ocultar partes del cuerpo — HUD con silueta de skin (abajo-izquierda)
+document.querySelectorAll<SVGElement>('#parts-hud [data-part]').forEach(el => {
+  const name = el.dataset.part as PartName;
   partVisible[name] = true;
-  btn.addEventListener('click', () => {
-    const v = !btn.classList.contains('active');
-    btn.classList.toggle('active', v);
+  el.addEventListener('click', () => {
+    const v = !el.classList.contains('active');
+    el.classList.toggle('active', v);
     partVisible[name] = v;
     model.setPartVisible(name, v);
   });

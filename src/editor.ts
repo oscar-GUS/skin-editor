@@ -1,6 +1,6 @@
 import { TEX } from './skin';
 
-export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'fill';
+export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'fill' | 'gradient' | 'select';
 
 // 2D pixel editor. Escribe sobre la CAPA ACTIVA (`target`) y muestra/lee el
 // resultado COMPUESTO (`source`, lo que se ve). El cuentagotas saca el color del
@@ -20,7 +20,7 @@ export class SkinEditor {
 
   // Pincel
   brushSize = 1;                                   // lado del cuadrado (px)
-  brushDensity = 1;                                // 0..1 cobertura (scatter)
+  feather = 0;                                     // 0..1 difuminado (caída de alfa hacia los bordes)
   brushOpacity = 1;                                // 0..1 alfa del trazo
   brushBlend: GlobalCompositeOperation = 'source-over';
   lockAlpha = false;                               // pintar solo sobre píxeles existentes
@@ -85,6 +85,8 @@ export class SkinEditor {
   }
 
   paintPixel(x: number, y: number) {
+    // Degradado y selección se gestionan aparte (por arrastre); aquí no pintan.
+    if (this.tool === 'gradient' || this.tool === 'select') return;
     if (this.tool === 'eyedropper') {
       const d = this.sctx.getImageData(x, y, 1, 1).data;   // del compuesto
       if (d[3] === 0) return;
@@ -107,15 +109,16 @@ export class SkinEditor {
   private stamp(cx: number, cy: number) {
     const size = this.brushSize;
     const start = -Math.floor((size - 1) / 2);
+    const mid = (size - 1) / 2;             // centro del pincel en coords locales
+    const radio = mid + 0.0001;
+    const erase = this.tool === 'eraser';
     const ctx = this.tctx;
     ctx.save();
-    if (this.tool === 'eraser') {
+    if (erase) {
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.globalAlpha = 1;
       ctx.fillStyle = '#000';
     } else {
       ctx.globalCompositeOperation = this.lockAlpha ? 'source-atop' : this.brushBlend;
-      ctx.globalAlpha = this.brushOpacity;
       ctx.fillStyle = this.color;
     }
     for (let dy = 0; dy < size; dy++) {
@@ -124,8 +127,15 @@ export class SkinEditor {
         if (x < 0 || y < 0 || x >= TEX || y >= TEX) continue;
         const k = y * TEX + x;
         if (this.strokePainted.has(k)) continue;
-        if (this.brushDensity < 1 && Math.random() > this.brushDensity) continue;
+        // Difuminado: el alfa cae hacia los bordes del pincel.
+        let a = erase ? 1 : this.brushOpacity;
+        if (this.feather > 0 && size > 1) {
+          const dist = Math.hypot(dx - mid, dy - mid) / radio;          // 0 centro → 1 borde
+          a *= Math.max(0, 1 - this.feather * Math.min(1, dist));
+        }
+        if (a <= 0) continue;
         this.strokePainted.add(k);
+        ctx.globalAlpha = a;
         ctx.fillRect(x, y, 1, 1);
       }
     }
