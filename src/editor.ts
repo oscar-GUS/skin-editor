@@ -1,6 +1,9 @@
 import { TEX } from './skin';
 
 export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'fill' | 'gradient' | 'select';
+// Modos de la herramienta seleccionar.
+export type SelectMode = 'rect' | 'colorContiguous' | 'color' | 'part' | 'face';
+export interface GradStop { color: string; pos: number; a: number }
 
 // 2D pixel editor. Escribe sobre la CAPA ACTIVA (`target`) y muestra/lee el
 // resultado COMPUESTO (`source`, lo que se ve). El cuentagotas saca el color del
@@ -15,26 +18,30 @@ export class SkinEditor {
   private scale = 8;
 
   tool: Tool = 'pencil';
+  selectMode: SelectMode = 'rect';
   color = '#A97C50';
   showGrid = true;
 
   // Pincel
   brushSize = 1;                                   // lado del cuadrado/diámetro (px)
   brushShape: 'square' | 'circle' = 'square';      // forma de la punta
-  feather = 0;                                     // 0..1 difuminado (caída de alfa hacia los bordes)
+  feather = 0;                                     // 0..1 difuminado (anchura del borde suave)
   brushOpacity = 1;                                // 0..1 alfa del trazo
   brushBlend: GlobalCompositeOperation = 'source-over';
   lockAlpha = false;                               // pintar solo sobre píxeles existentes
   private strokePainted = new Set<number>();       // píxeles ya tocados en el trazo
+  private lineFrom: { x: number; y: number } | null = null;   // ancla para línea recta (shift)
+  private fillTolerance = 32;                       // tolerancia del relleno (suma de canales)
 
-  // Degradado multi-stop (colores con posición 0..1, estilo Photoshop)
-  gradStops: { color: string; pos: number }[] = [
-    { color: '#A97C50', pos: 0 },
-    { color: '#3A467E', pos: 1 },
+  // Degradado multi-stop (color + posición 0..1 + opacidad, estilo Photoshop)
+  gradStops: GradStop[] = [
+    { color: '#A97C50', pos: 0, a: 1 },
+    { color: '#3A467E', pos: 1, a: 1 },
   ];
 
-  // Selección (zona de trabajo) + portapapeles
+  // Selección: rectángulo simple y/o máscara por píxel (color/contiguo).
   selection: { x: number; y: number; w: number; h: number } | null = null;
+  private selMask: Uint8Array | null = null;
   private clipboard: ImageData | null = null;
 
   // Cursor (para previsualizar el grosor) y arrastre (degradado/selección)
@@ -45,9 +52,15 @@ export class SkinEditor {
   private undoStack: { canvas: HTMLCanvasElement; img: ImageData }[] = [];
   private undoLimit = 60;
 
+  // Marching ants animadas (2D): fase del trazo discontinuo.
+  private antPhase = 0;
+  private antsRAF = 0;
+
   onChange: () => void = () => {};
   onColorPick: (hex: string) => void = () => {};
   onUse: (hex: string) => void = () => {};   // color aplicado (lápiz/relleno) -> recientes
+  onSelectionChange: () => void = () => {};  // la selección ha cambiado (para el 3D)
+  onSelectPart: (x: number, y: number, mode: SelectMode) => void = () => {};  // parte/cara -> main
 
   constructor(source: HTMLCanvasElement, display: HTMLCanvasElement) {
     this.source = source;
@@ -67,20 +80,21 @@ export class SkinEditor {
       const y = Math.floor(((e.clientY - rect.top) / rect.height) * TEX);
       return { x: Math.max(0, Math.min(TEX - 1, x)), y: Math.max(0, Math.min(TEX - 1, y)) };
     };
-    const isDrag = () => this.tool === 'gradient' || this.tool === 'select';
 
     display.addEventListener('pointerdown', (e) => {
       const p = toTex(e);
       display.setPointerCapture(e.pointerId);
-      if (isDrag()) {
-        dragging = true;
-        this.dragA = p; this.dragB = p;
-        this.render();
-      } else {
-        if (this.tool !== 'eyedropper') this.pushUndo();
-        painting = this.tool !== 'eyedropper' && this.tool !== 'fill';
-        this.paintPixel(p.x, p.y);
+      if (this.tool === 'select') {
+        if (this.selectMode === 'rect') { dragging = true; this.dragA = p; this.dragB = p; this.render(); }
+        else if (this.selectMode === 'color') this.selectByColor(p.x, p.y);
+        else if (this.selectMode === 'colorContiguous') this.selectContiguous(p.x, p.y);
+        else this.onSelectPart(p.x, p.y, this.selectMode);   // part / face los resuelve main (necesita el atlas)
+        return;
       }
+      if (this.tool === 'gradient') { dragging = true; this.dragA = p; this.dragB = p; this.render(); return; }
+      if (this.tool !== 'eyedropper') this.pushUndo();
+      painting = this.tool !== 'eyedropper' && this.tool !== 'fill';
+      this.paintPixel(p.x, p.y, e.shiftKey);
     });
     display.addEventListener('pointermove', (e) => {
       const p = toTex(e);
@@ -122,8 +136,8 @@ export class SkinEditor {
     this.render();
   }
 
-  paintPixel(x: number, y: number) {
-    // Degradado y selección se gestionan aparte (por arrastre); aquí no pintan.
+  paintPixel(x: number, y: number, shift = false) {
+    // Degradado y selección se gestionan aparte (por arrastre/clic).
     if (this.tool === 'gradient' || this.tool === 'select') return;
     if (this.tool === 'eyedropper') {
       const d = this.sctx.getImageData(x, y, 1, 1).data;   // del compuesto
@@ -135,20 +149,41 @@ export class SkinEditor {
       this.floodFill(x, y);
       this.onUse(this.color);
     } else {
-      this.stamp(x, y);
+      // shift + clic = línea recta desde el último punto pintado.
+      if (shift && this.lineFrom) this.strokeLine(this.lineFrom, { x, y });
+      else this.stamp(x, y);
       if (this.tool !== 'eraser') this.onUse(this.color);
     }
     this.onChange();
     this.render();
   }
 
-  // Sello del pincel sobre la capa activa: tamaño, densidad, opacidad, fusión y
-  // bloqueo de alfa. No repinta un pixel ya tocado en el mismo trazo.
+  // Alfa de un píxel del pincel según forma y difuminado. null = fuera de la punta.
+  // El difuminado mantiene el centro SÓLIDO y sólo suaviza el borde (anchura=feather).
+  private brushAlpha(dx: number, dy: number): number | null {
+    const size = this.brushSize;
+    if (size <= 1) return 1;
+    const half = size / 2;
+    const nx = dx + 0.5 - half, ny = dy + 0.5 - half;
+    let d: number;
+    if (this.brushShape === 'circle') {
+      d = Math.hypot(nx, ny) / half;
+      if (d > 1) return null;                       // fuera del círculo
+    } else {
+      d = Math.max(Math.abs(nx), Math.abs(ny)) / half;   // distancia "cuadrada"
+    }
+    if (this.feather <= 0) return 1;
+    const core = 1 - this.feather;                  // radio sólido (sin caída)
+    if (d <= core) return 1;
+    const t = (d - core) / (1 - core);
+    const a = 1 - Math.min(1, Math.max(0, t));
+    return a <= 0 ? null : a;
+  }
+
+  // Sello del pincel sobre la capa activa.
   private stamp(cx: number, cy: number) {
     const size = this.brushSize;
     const start = -Math.floor((size - 1) / 2);
-    const mid = (size - 1) / 2;             // centro del pincel en coords locales
-    const radio = mid + 0.0001;
     const erase = this.tool === 'eraser';
     const ctx = this.tctx;
     ctx.save();
@@ -166,11 +201,9 @@ export class SkinEditor {
         if (!this.inSel(x, y)) continue;           // limitar a la zona seleccionada
         const k = y * TEX + x;
         if (this.strokePainted.has(k)) continue;
-        const dist = size > 1 ? Math.hypot(dx - mid, dy - mid) / radio : 0;   // 0 centro → 1 borde
-        if (this.brushShape === 'circle' && dist > 1) continue;               // fuera del círculo
-        // Difuminado: el alfa cae hacia los bordes del pincel.
-        let a = erase ? 1 : this.brushOpacity;
-        if (this.feather > 0 && size > 1) a *= Math.max(0, 1 - this.feather * Math.min(1, dist));
+        const fa = this.brushAlpha(dx, dy);
+        if (fa === null) continue;
+        const a = (erase ? 1 : this.brushOpacity) * fa;
         if (a <= 0) continue;
         this.strokePainted.add(k);
         ctx.globalAlpha = a;
@@ -178,27 +211,52 @@ export class SkinEditor {
       }
     }
     ctx.restore();
+    this.lineFrom = { x: cx, y: cy };              // ancla para la siguiente línea recta
   }
 
-  // Relleno sobre la capa activa (contigüidad según los píxeles de esa capa).
+  // Línea recta (Bresenham) sellando el pincel a lo largo del recorrido.
+  private strokeLine(a: { x: number; y: number }, b: { x: number; y: number }) {
+    let x0 = a.x, y0 = a.y;
+    const x1 = b.x, y1 = b.y;
+    const dx = Math.abs(x1 - x0), dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    for (;;) {
+      this.stamp(x0, y0);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * err;
+      if (e2 > -dy) { err -= dy; x0 += sx; }
+      if (e2 < dx) { err += dx; y0 += sy; }
+    }
+  }
+
+  // Relleno sobre la capa activa (contigüidad con tolerancia, para no dejar motas).
   private floodFill(x: number, y: number) {
     const img = this.tctx.getImageData(0, 0, TEX, TEX);
     const data = img.data;
     const idx = (px: number, py: number) => (py * TEX + px) * 4;
     const start = idx(x, y);
-    const target = [data[start], data[start + 1], data[start + 2], data[start + 3]];
+    const tr = data[start], tg = data[start + 1], tb = data[start + 2], ta = data[start + 3];
     const fill = hexToRgb(this.color);
-    const a = Math.round(this.brushOpacity * 255);
-    if (target[0] === fill[0] && target[1] === fill[1] && target[2] === fill[2] && target[3] === a) return;
+    const fa = Math.round(this.brushOpacity * 255);
+    const tol = this.fillTolerance;
+    const matches = (i: number) =>
+      Math.abs(data[i] - tr) + Math.abs(data[i + 1] - tg) +
+      Math.abs(data[i + 2] - tb) + Math.abs(data[i + 3] - ta) <= tol;
+    if (Math.abs(tr - fill[0]) + Math.abs(tg - fill[1]) + Math.abs(tb - fill[2]) + Math.abs(ta - fa) === 0) return;
 
+    const seen = new Uint8Array(TEX * TEX);
     const stack = [[x, y]];
     while (stack.length) {
       const [cx, cy] = stack.pop()!;
       if (cx < 0 || cy < 0 || cx >= TEX || cy >= TEX) continue;
+      const k = cy * TEX + cx;
+      if (seen[k]) continue;
       if (!this.inSel(cx, cy)) continue;           // el relleno no sale de la selección
       const i = idx(cx, cy);
-      if (data[i] !== target[0] || data[i + 1] !== target[1] || data[i + 2] !== target[2] || data[i + 3] !== target[3]) continue;
-      data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = a;
+      if (!matches(i)) continue;
+      seen[k] = 1;
+      data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = fa;
       stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
     }
     this.tctx.putImageData(img, 0, 0);
@@ -206,9 +264,12 @@ export class SkinEditor {
 
   // ¿El píxel está dentro de la selección activa? (sin selección, todo vale)
   private inSel(x: number, y: number): boolean {
+    if (this.selMask) return this.selMask[y * TEX + x] === 1;
     const s = this.selection;
     return !s || (x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h);
   }
+  isSelected(x: number, y: number): boolean { return this.inSel(x, y); }
+  hasSelection(): boolean { return !!(this.selection || this.selMask); }
 
   // Degradado lineal multi-stop A→B sobre la capa activa (o la selección).
   private applyGradient(a: { x: number; y: number }, b: { x: number; y: number }) {
@@ -218,7 +279,7 @@ export class SkinEditor {
     const ctx = this.tctx;
     const r = this.selection ?? { x: 0, y: 0, w: TEX, h: TEX };
     const g = ctx.createLinearGradient(a.x + 0.5, a.y + 0.5, b.x + 0.5, b.y + 0.5);
-    for (const st of stops) g.addColorStop(Math.max(0, Math.min(1, st.pos)), st.color);
+    for (const st of stops) g.addColorStop(Math.max(0, Math.min(1, st.pos)), hexToRgba(st.color, st.a));
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
     ctx.globalCompositeOperation = this.lockAlpha ? 'source-atop' : 'source-over';
@@ -230,22 +291,74 @@ export class SkinEditor {
     this.onChange(); this.render();
   }
 
+  // ── Selección ──────────────────────────────────────────────────────────────
+  private commitSelection() { this.render(); this.startAnts(); this.onSelectionChange(); }
+
   private setSelectionFromDrag(a: { x: number; y: number }, b: { x: number; y: number }) {
     const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
     const w = Math.abs(b.x - a.x) + 1, h = Math.abs(b.y - a.y) + 1;
-    this.selection = (w <= 1 && h <= 1) ? null : { x, y, w, h };   // clic simple = quitar selección
-    this.render();
+    this.selMask = null;
+    this.selection = (w <= 1 && h <= 1) ? null : { x, y, w, h };   // clic simple = quitar
+    this.commitSelection();
   }
 
-  clearSelection() { this.selection = null; this.render(); }
+  clearSelection() { this.selection = null; this.selMask = null; this.stopAnts(); this.render(); this.onSelectionChange(); }
 
-  // Fija la selección a un rectángulo concreto (p. ej. desde el 3D al clicar una parte).
+  // Fija la selección a un rectángulo concreto (parte/cara, desde 2D o 3D).
   setSelectionRect(x: number, y: number, w: number, h: number) {
+    this.selMask = null;
     this.selection = {
       x: Math.round(x), y: Math.round(y),
       w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)),
     };
-    this.render();
+    this.commitSelection();
+  }
+
+  // Selección por máscara (color / contiguo). Calcula también el bbox para pegar.
+  private setMask(mask: Uint8Array) {
+    let minX = TEX, minY = TEX, maxX = -1, maxY = -1, any = false;
+    for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
+      if (mask[y * TEX + x]) { any = true; minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+    }
+    if (!any) { this.clearSelection(); return; }
+    this.selMask = mask;
+    this.selection = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+    this.commitSelection();
+  }
+
+  // Todos los píxeles del compuesto con exactamente el mismo color.
+  selectByColor(x: number, y: number) {
+    const img = this.sctx.getImageData(0, 0, TEX, TEX).data;
+    const i0 = (y * TEX + x) * 4;
+    if (img[i0 + 3] === 0) { this.clearSelection(); return; }
+    const r = img[i0], g = img[i0 + 1], b = img[i0 + 2];
+    const mask = new Uint8Array(TEX * TEX);
+    for (let k = 0; k < TEX * TEX; k++) {
+      const i = k * 4;
+      if (img[i + 3] !== 0 && img[i] === r && img[i + 1] === g && img[i + 2] === b) mask[k] = 1;
+    }
+    this.setMask(mask);
+  }
+
+  // Zona contigua del mismo color (flood) en el compuesto.
+  selectContiguous(x: number, y: number) {
+    const img = this.sctx.getImageData(0, 0, TEX, TEX).data;
+    const i0 = (y * TEX + x) * 4;
+    const tr = img[i0], tg = img[i0 + 1], tb = img[i0 + 2], ta = img[i0 + 3];
+    const mask = new Uint8Array(TEX * TEX);
+    const seen = new Uint8Array(TEX * TEX);
+    const stack = [[x, y]];
+    const match = (i: number) => Math.abs(img[i] - tr) + Math.abs(img[i + 1] - tg) + Math.abs(img[i + 2] - tb) + Math.abs(img[i + 3] - ta) <= 16;
+    while (stack.length) {
+      const [cx, cy] = stack.pop()!;
+      if (cx < 0 || cy < 0 || cx >= TEX || cy >= TEX) continue;
+      const k = cy * TEX + cx;
+      if (seen[k]) continue;
+      if (!match(k * 4)) continue;
+      seen[k] = 1; mask[k] = 1;
+      stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
+    }
+    this.setMask(mask);
   }
 
   // Copia los píxeles de la selección (de la capa activa) al portapapeles.
@@ -262,6 +375,54 @@ export class SkinEditor {
     this.pushUndo();
     this.tctx.putImageData(this.clipboard, s ? s.x : 0, s ? s.y : 0);
     this.onChange(); this.render();
+  }
+
+  // Pinta la máscara de selección (naranja) en un contexto 64×64, para el 3D.
+  fillSelectionMask(ctx: CanvasRenderingContext2D) {
+    ctx.clearRect(0, 0, TEX, TEX);
+    if (!this.hasSelection()) return;
+    ctx.fillStyle = 'rgba(244,129,31,0.85)';
+    for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) if (this.inSel(x, y)) ctx.fillRect(x, y, 1, 1);
+  }
+
+  // ── Marching ants (2D) ───────────────────────────────────────────────────────
+  private startAnts() {
+    if (!this.hasSelection()) { this.stopAnts(); return; }
+    if (this.antsRAF) return;
+    const tick = () => {
+      if (!this.hasSelection()) { this.antsRAF = 0; return; }
+      this.antPhase = (this.antPhase + 0.6) % 7;
+      this.render();
+      this.antsRAF = requestAnimationFrame(tick);
+    };
+    this.antsRAF = requestAnimationFrame(tick);
+  }
+  private stopAnts() { if (this.antsRAF) { cancelAnimationFrame(this.antsRAF); this.antsRAF = 0; } }
+
+  // Traza el contorno de la selección (rect o máscara) con trazo discontinuo animado.
+  private strokeSelection(ctx: CanvasRenderingContext2D, s: number) {
+    ctx.save();
+    ctx.setLineDash([4, 3]);
+    ctx.lineDashOffset = -this.antPhase;
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = 'rgba(244,129,31,0.95)';
+    if (this.selMask) {
+      ctx.beginPath();
+      const m = this.selMask;
+      const on = (x: number, y: number) => x >= 0 && y >= 0 && x < TEX && y < TEX && m[y * TEX + x] === 1;
+      for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
+        if (!on(x, y)) continue;
+        if (!on(x, y - 1)) { ctx.moveTo(x * s, y * s); ctx.lineTo((x + 1) * s, y * s); }
+        if (!on(x, y + 1)) { ctx.moveTo(x * s, (y + 1) * s); ctx.lineTo((x + 1) * s, (y + 1) * s); }
+        if (!on(x - 1, y)) { ctx.moveTo(x * s, y * s); ctx.lineTo(x * s, (y + 1) * s); }
+        if (!on(x + 1, y)) { ctx.moveTo((x + 1) * s, y * s); ctx.lineTo((x + 1) * s, (y + 1) * s); }
+      }
+      ctx.stroke();
+    } else if (this.selection) {
+      const r = this.selection;
+      ctx.strokeRect(r.x * s + 0.5, r.y * s + 0.5, r.w * s - 1, r.h * s - 1);
+    }
+    ctx.restore();
   }
 
   render() {
@@ -290,16 +451,7 @@ export class SkinEditor {
       ctx.stroke();
     }
 
-    // ── Selección (marquee) ──────────────────────────────────────────────────
-    if (this.selection) {
-      const r = this.selection;
-      ctx.save();
-      ctx.setLineDash([4, 3]);
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(244,129,31,0.95)';
-      ctx.strokeRect(r.x * s + 0.5, r.y * s + 0.5, r.w * s - 1, r.h * s - 1);
-      ctx.restore();
-    }
+    if (this.hasSelection()) this.strokeSelection(ctx, s);
 
     // ── Arrastre en curso (degradado: línea A→B · selección: rectángulo) ─────
     if (this.dragA && this.dragB) {
@@ -327,23 +479,40 @@ export class SkinEditor {
       ctx.restore();
     }
 
-    // ── Previsualización del pincel: grosor + forma + dureza (footprint real) ─
+    // ── Previsualización del pincel: relleno tenue + contorno del grosor + núcleo sólido ─
     if (this.hover && (this.tool === 'pencil' || this.tool === 'eraser')) {
       const size = this.brushSize;
       const start = -Math.floor((size - 1) / 2);
-      const mid = (size - 1) / 2, radio = mid + 0.0001;
+      const left = (this.hover.x + start) * s, top = (this.hover.y + start) * s, side = size * s;
       const col = this.tool === 'eraser' ? '255,255,255' : '244,129,31';
       ctx.save();
+      // celdas reales (footprint) con su alfa
       for (let dy = 0; dy < size; dy++) {
         for (let dx = 0; dx < size; dx++) {
-          const dist = size > 1 ? Math.hypot(dx - mid, dy - mid) / radio : 0;
-          if (this.brushShape === 'circle' && dist > 1) continue;
-          let a = 1;
-          if (this.feather > 0 && size > 1) a = Math.max(0.12, 1 - this.feather * Math.min(1, dist));
+          const fa = this.brushAlpha(dx, dy);
+          if (fa === null) continue;
           const x = this.hover.x + start + dx, y = this.hover.y + start + dy;
           if (x < 0 || y < 0 || x >= TEX || y >= TEX) continue;
-          ctx.fillStyle = `rgba(${col},${0.4 * a})`;
+          ctx.fillStyle = `rgba(${col},${0.35 * fa})`;
           ctx.fillRect(x * s, y * s, s, s);
+        }
+      }
+      // contorno del tamaño del pincel
+      ctx.lineWidth = 1.5; ctx.strokeStyle = `rgba(${col},0.95)`;
+      if (this.brushShape === 'circle' && size > 1) {
+        ctx.beginPath(); ctx.arc(left + side / 2, top + side / 2, side / 2, 0, Math.PI * 2); ctx.stroke();
+      } else {
+        ctx.strokeRect(left + 0.5, top + 0.5, side - 1, side - 1);
+      }
+      // núcleo sólido (donde termina el difuminado)
+      if (this.feather > 0 && size > 1) {
+        const core = (1 - this.feather);
+        const cs = side * core;
+        ctx.setLineDash([3, 2]); ctx.strokeStyle = `rgba(${col},0.6)`;
+        if (this.brushShape === 'circle') {
+          ctx.beginPath(); ctx.arc(left + side / 2, top + side / 2, cs / 2, 0, Math.PI * 2); ctx.stroke();
+        } else {
+          ctx.strokeRect(left + (side - cs) / 2, top + (side - cs) / 2, cs, cs);
         }
       }
       ctx.restore();
@@ -357,4 +526,8 @@ function rgbToHex(r: number, g: number, b: number): string {
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function hexToRgba(hex: string, a: number): string {
+  const [r, g, b] = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${a})`;
 }

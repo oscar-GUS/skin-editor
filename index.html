@@ -20,7 +20,10 @@
     </div>
   </header>
 
-  <div class="layout">
+  <div class="layout" id="layout">
+    <!-- Manijas para redimensionar las columnas laterales -->
+    <div class="col-resizer" id="resize-left" title="Arrastra para redimensionar"></div>
+    <div class="col-resizer" id="resize-right" title="Arrastra para redimensionar"></div>
 
     <!-- ── COLUMNA IZQUIERDA: Capas ─────────────────────────────────── -->
     <aside class="col col-left">
@@ -86,9 +89,15 @@
             <rect data-part="rightLeg" class="hud-part active" x="21" y="48" width="8"  height="30" rx="2"/>
             <rect data-part="leftLeg"  class="hud-part active" x="31" y="48" width="8"  height="30" rx="2"/>
           </svg>
-          <div class="seg hud-layer" id="layer-toggle" title="Capa de trabajo">
-            <button data-layer="inner" class="active">Interna</button>
-            <button data-layer="outer">Externa</button>
+          <div class="hud-layers" id="layer-toggle" title="Capa de trabajo · clic = pintar · ojo = ver/ocultar">
+            <div class="hud-layer-row active" data-layer="inner">
+              <button class="hud-eye" data-eye="inner" title="Ver/ocultar capa interna">👁</button>
+              <span>Interna</span>
+            </div>
+            <div class="hud-layer-row" data-layer="outer">
+              <button class="hud-eye off" data-eye="outer" title="Ver/ocultar capa externa">👁</button>
+              <span>Externa</span>
+            </div>
           </div>
         </div>
 
@@ -113,31 +122,31 @@
         <button data-tool="select" class="tool" title="Seleccionar zona">⬚</button>
       </div>
 
-      <div class="brush-panel">
+      <div class="brush-panel" id="brush-panel">
         <span class="recents-label">Pincel</span>
-        <label class="slider-row">Grosor
+        <label class="slider-row" id="row-size">Grosor
           <input type="range" id="brush-size" min="1" max="8" step="1" value="1">
           <span id="brush-size-val">1 px</span>
         </label>
-        <div class="tb-group">
+        <div class="tb-group" id="row-shape">
           <span class="tb-label">Forma</span>
           <div class="seg" id="brush-shape">
             <button data-shape="square" class="active">Cuadrado</button>
             <button data-shape="circle">Círculo</button>
           </div>
         </div>
-        <label class="slider-row">Difuminado
+        <label class="slider-row" id="row-feather">Difuminado
           <input type="range" id="brush-density" min="0" max="100" step="5" value="0">
           <span id="brush-density-val">0%</span>
         </label>
-        <label class="slider-row">Opacidad
+        <label class="slider-row" id="row-opacity">Opacidad
           <input type="range" id="brush-opacity" min="5" max="100" step="5" value="100">
           <span id="brush-opacity-val">100%</span>
         </label>
-        <label class="slider-row">Fusión
+        <label class="slider-row" id="row-blend">Fusión
           <select id="brush-blend" class="blend-sel"></select>
         </label>
-        <div class="brush-toggles">
+        <div class="brush-toggles" id="row-toggles">
           <label class="check"><input type="checkbox" id="lock-alpha"> Bloquear alfa</label>
           <label class="check"><input type="checkbox" id="symmetry"> Simetría</label>
           <div class="seg" id="sym-axis" title="Eje de simetría">
@@ -145,6 +154,24 @@
             <button data-axis="z">Z</button>
           </div>
         </div>
+      </div>
+
+      <!-- Seleccionar (visible solo con la herramienta seleccionar) -->
+      <div class="select-panel" id="select-panel" hidden>
+        <span class="recents-label">Seleccionar</span>
+        <div class="select-modes" id="select-modes">
+          <button data-selmode="rect" class="active">Rectángulo</button>
+          <button data-selmode="colorContiguous">Grupo de color</button>
+          <button data-selmode="color">Mismo color</button>
+          <button data-selmode="part">Bloque</button>
+          <button data-selmode="face">Cara del bloque</button>
+        </div>
+        <div class="select-actions">
+          <button id="sel-copy">Copiar</button>
+          <button id="sel-paste">Pegar</button>
+          <button id="sel-clear">Quitar</button>
+        </div>
+        <p class="grad-hint">Marca una zona para limitar dónde pintas — funciona en la textura 2D y en el modelo 3D.</p>
       </div>
 
       <!-- Degradado multi-stop (visible solo con la herramienta degradado) -->
@@ -155,10 +182,18 @@
         </div>
         <div class="grad-stop-edit">
           <input type="color" id="grad-stop-color" title="Color del punto">
-          <label>Pos <input type="number" id="grad-stop-pos" min="0" max="100" step="1" class="grad-pos-input">%</label>
+          <label class="grad-op">Op
+            <input type="range" id="grad-stop-a" min="0" max="100" step="1" value="100" title="Opacidad del punto">
+          </label>
+          <div class="num-stepper" title="Posición del punto">
+            <button id="grad-pos-dec" type="button">−</button>
+            <input type="number" id="grad-stop-pos" min="0" max="100" step="1" class="grad-pos-input">
+            <span class="num-unit">%</span>
+            <button id="grad-pos-inc" type="button">+</button>
+          </div>
           <button id="grad-stop-del" class="mini-btn">Quitar</button>
         </div>
-        <p class="grad-hint">Clic en la barra = nuevo color · arrastra los puntos para moverlos · luego arrastra A→B sobre la textura 2D para aplicarlo.</p>
+        <p class="grad-hint">Clic en la barra = nuevo punto · arrastra los puntos para moverlos · luego arrastra A→B sobre la textura 2D para aplicarlo.</p>
       </div>
 
       <div class="color-row">

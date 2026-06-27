@@ -1,4 +1,5 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 :root {
   --bg: #0D0D0F;
@@ -57,11 +58,22 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 
 .layout {
   display: grid;
-  grid-template-columns: 300px 1fr 320px;
+  grid-template-columns: var(--left-w, 300px) 1fr var(--right-w, 320px);
   grid-template-rows: 1fr;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
+
+/* Manijas para redimensionar las columnas laterales (sobre el borde) */
+.col-resizer {
+  position: absolute; top: 0; bottom: 0; width: 7px; z-index: 7;
+  cursor: col-resize; background: transparent; transition: background 0.12s;
+}
+.col-resizer:hover, .col-resizer.dragging { background: rgba(244,129,31,0.4); }
+#resize-left  { left: calc(var(--left-w, 300px) - 3px); }
+#resize-right { right: calc(var(--right-w, 320px) - 3px); }
+@media (max-width: 1024px) { .col-resizer { display: none; } }
 
 /* ── Columnas ─────────────────────────────────── */
 .col {
@@ -96,8 +108,61 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .hud-part:hover { opacity: 0.5; }
 .hud-part.active { opacity: 0.92; }
-.hud-layer { width: 100%; }
-.hud-layer button { flex: 1; padding: 4px 0; font-size: 11px; }
+/* Capas interna/externa en el HUD (estilo Photoshop: ojo + nombre) */
+.hud-layers { width: 100%; display: flex; flex-direction: column; gap: 4px; }
+.hud-layer-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 7px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer;
+}
+.hud-layer-row:hover { border-color: #3a3a3e; }
+.hud-layer-row.active { border-color: var(--accent); background: #1e1810; }
+.hud-layer-row span { font-size: 11px; font-weight: 600; color: var(--text-sec); }
+.hud-layer-row.active span { color: var(--text); }
+.hud-eye {
+  padding: 0; width: 20px; height: 20px; font-size: 11px; line-height: 1;
+  background: none; border: none; flex-shrink: 0;
+}
+.hud-eye.off { opacity: 0.35; filter: grayscale(1); }
+
+/* Panel de selección */
+.select-panel { display: flex; flex-direction: column; gap: 8px; }
+.select-panel[hidden] { display: none; }
+.select-modes { display: flex; flex-direction: column; gap: 4px; }
+.select-modes button {
+  text-align: left; padding: 7px 10px; font-size: 12px; font-weight: 500;
+  color: var(--text-sec); background: var(--panel);
+}
+.select-modes button:hover { border-color: #3a3a3e; color: var(--text); }
+.select-modes button.active { border-color: var(--accent); background: #1e1810; color: var(--text); }
+.select-actions { display: flex; gap: 6px; }
+.select-actions button { flex: 1; padding: 6px; font-size: 12px; }
+
+/* Opacidad del nodo de degradado */
+.grad-op { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.grad-op input[type="range"] { width: 56px; accent-color: var(--accent); height: 4px; }
+
+/* Stepper numérico con identidad MineLite (sustituye el spinner nativo) */
+.num-stepper {
+  display: inline-flex; align-items: center; gap: 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel); overflow: hidden;
+}
+.num-stepper button {
+  padding: 0; width: 22px; height: 24px; font-size: 14px; font-weight: 700; line-height: 1;
+  color: var(--accent); background: rgba(244,129,31,0.1); border: none; border-radius: 0;
+}
+.num-stepper button:hover { background: rgba(244,129,31,0.22); }
+.num-stepper .grad-pos-input {
+  width: 34px; text-align: center; border: none; border-radius: 0;
+  border-left: 1px solid var(--border); border-right: 0;
+  background: var(--bg); color: var(--text); padding: 3px 2px; font-size: 12px; font-family: inherit;
+}
+.num-stepper .num-unit { padding: 0 4px 0 2px; font-size: 11px; color: var(--text-dim); }
+/* sin flechas nativas del number */
+.grad-pos-input::-webkit-outer-spin-button,
+.grad-pos-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.grad-pos-input { -moz-appearance: textfield; appearance: textfield; }
 
 .tools { display: flex; gap: 6px; }
 .tool {

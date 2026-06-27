@@ -50,10 +50,13 @@ export interface SkinModel {
   group: THREE.Group;
   baseMeshes: THREE.Mesh[];
   setOuterVisible(v: boolean): void;
+  setBaseVisible(v: boolean): void;
   setGridVisible(v: boolean): void;
   setPartLayerVisible(name: PartName, layer: 'base' | 'outer', v: boolean): void;
   setPose(name: PoseName): void;
-  refreshOuter(): void;   // recalcula qué capas exteriores están vacías
+  refreshOuter(): void;          // recalcula qué capas exteriores están vacías
+  refreshSelection(): void;      // la textura de selección cambió
+  setSelectionVisible(v: boolean): void;  // parpadeo de la selección (marching ants 3D)
   dispose(): void;
 }
 
@@ -83,11 +86,14 @@ function getGridTexture(): THREE.Texture {
   return tex;
 }
 
-export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HTMLCanvasElement): SkinModel {
+export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HTMLCanvasElement, selCanvas: HTMLCanvasElement): SkinModel {
   const group = new THREE.Group();
   const baseMeshes: THREE.Mesh[] = [];
   const pivots: Record<string, THREE.Group> = {};
-  const reg: Record<string, { base: THREE.Mesh; outer: THREE.Mesh; grid: THREE.Mesh; overlay: Faces }> = {};
+  const reg: Record<string, {
+    base: THREE.Mesh; outer: THREE.Mesh; grid: THREE.Mesh; gridOuter: THREE.Mesh;
+    selBase: THREE.Mesh; selOuter: THREE.Mesh; overlay: Faces;
+  }> = {};
   // Visibilidad independiente por parte y por capa (interna=base / externa=outer).
   const partBaseVisible:  Record<string, boolean> = {};
   const partOuterVisible: Record<string, boolean> = {};
@@ -99,17 +105,25 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
   });
+  // Capa externa: cara frontal sólo (FrontSide) — evita el borde fantasma que
+  // creaban las caras traseras vistas a través de las transparentes.
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
-    transparent: true, alphaTest: 0.01, side: THREE.DoubleSide, depthWrite: false,
+    transparent: true, alphaTest: 0.01, side: THREE.FrontSide, depthWrite: false,
   });
-  // Material para caras de la capa exterior SIN contenido: no dibuja nada (evita el
-  // borde sucio del silueteado cuando la capa externa está vacía en esa cara).
+  // Material para caras de la capa exterior SIN contenido: no dibuja nada.
   const hiddenMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
   const gridMat = new THREE.MeshBasicMaterial({
     map: getGridTexture(), transparent: true, depthWrite: false,
   });
-  disposables.push(baseMat, outerMat, hiddenMat, gridMat);
+  // Selección: textura naranja (selCanvas) sobre los texeles seleccionados.
+  const selTex = new THREE.CanvasTexture(selCanvas);
+  selTex.magFilter = THREE.NearestFilter; selTex.minFilter = THREE.NearestFilter;
+  selTex.colorSpace = THREE.SRGBColorSpace;
+  const selMat = new THREE.MeshBasicMaterial({
+    map: selTex, transparent: true, alphaTest: 0.01, depthWrite: false, depthTest: false,
+  });
+  disposables.push(baseMat, outerMat, hiddenMat, gridMat, selMat);
 
   for (const part of buildParts(slim)) {
     const [w, h, d] = part.size;
@@ -145,26 +159,50 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     container.add(outerMesh);
     disposables.push(outerGeo);
 
-    // grid overlay: same UVs as the base, slightly inflated to avoid z-fighting
+    // Cuadrícula interna (UVs de la base) y externa (UVs del overlay).
     const gridGeo = new THREE.BoxGeometry(w + 0.06, h + 0.06, d + 0.06);
     applyUV(gridGeo, part.base);
     const gridMesh = new THREE.Mesh(gridGeo, gridMat);
-    gridMesh.position.set(...local);
-    gridMesh.visible = false;
-    gridMesh.renderOrder = 2;
+    gridMesh.position.set(...local); gridMesh.visible = false; gridMesh.renderOrder = 2;
     container.add(gridMesh);
     disposables.push(gridGeo);
 
-    reg[part.name] = { base: baseMesh, outer: outerMesh, grid: gridMesh, overlay: part.overlay };
+    const gridOuterGeo = new THREE.BoxGeometry(w + 1.08, h + 1.08, d + 1.08);
+    applyUV(gridOuterGeo, part.overlay);
+    const gridOuterMesh = new THREE.Mesh(gridOuterGeo, gridMat);
+    gridOuterMesh.position.set(...local); gridOuterMesh.visible = false; gridOuterMesh.renderOrder = 2;
+    container.add(gridOuterMesh);
+    disposables.push(gridOuterGeo);
+
+    // Selección (interna + externa), un pelín más infladas para quedar por encima.
+    const selBaseGeo = new THREE.BoxGeometry(w + 0.12, h + 0.12, d + 0.12);
+    applyUV(selBaseGeo, part.base);
+    const selBaseMesh = new THREE.Mesh(selBaseGeo, selMat);
+    selBaseMesh.position.set(...local); selBaseMesh.visible = false; selBaseMesh.renderOrder = 4;
+    container.add(selBaseMesh);
+    disposables.push(selBaseGeo);
+
+    const selOuterGeo = new THREE.BoxGeometry(w + 1.14, h + 1.14, d + 1.14);
+    applyUV(selOuterGeo, part.overlay);
+    const selOuterMesh = new THREE.Mesh(selOuterGeo, selMat);
+    selOuterMesh.position.set(...local); selOuterMesh.visible = false; selOuterMesh.renderOrder = 4;
+    container.add(selOuterMesh);
+    disposables.push(selOuterGeo);
+
+    reg[part.name] = {
+      base: baseMesh, outer: outerMesh, grid: gridMesh, gridOuter: gridOuterMesh,
+      selBase: selBaseMesh, selOuter: selOuterMesh, overlay: part.overlay,
+    };
     partBaseVisible[part.name] = true;
     partOuterVisible[part.name] = true;
   }
 
   let outerVisible = true;   // global: la capa externa se oculta al trabajar en interna
+  let baseVisible = true;    // global: visibilidad de la capa interna
   let gridVisible = false;
+  let selVisible = false;    // parpadeo de la selección
   const srcCtx = source.getContext('2d', { willReadFrequently: true })!;
 
-  // ¿Tiene algún pixel no transparente este rectángulo del atlas?
   function rectHasContent(img: ImageData, r: { x: number; y: number; w: number; h: number }): boolean {
     for (let yy = r.y; yy < r.y + r.h; yy++) {
       for (let xx = r.x; xx < r.x + r.w; xx++) {
@@ -174,12 +212,10 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     return false;
   }
 
-  // Asigna a cada cara de la capa exterior el material visible o el invisible según
-  // tenga o no contenido, y oculta la malla entera si ninguna cara tiene nada.
   function refreshOuter() {
     const img = srcCtx.getImageData(0, 0, TEX, TEX);
     for (const name in reg) {
-      const { outer, overlay } = reg[name];
+      const { outer, gridOuter, overlay } = reg[name];
       const mats = outer.material as THREE.Material[];
       let alguna = false;
       FACE_ORDER.forEach((k, i) => {
@@ -188,6 +224,17 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
         if (has) alguna = true;
       });
       outer.visible = partOuterVisible[name] && outerVisible && alguna;
+      // La cuadrícula externa es una guía: visible aunque la capa esté vacía (solo líneas).
+      gridOuter.visible = gridVisible && partOuterVisible[name] && outerVisible;
+    }
+    refreshSelVisibility();
+  }
+
+  function refreshSelVisibility() {
+    for (const name in reg) {
+      const r = reg[name];
+      r.selBase.visible = selVisible && baseVisible && partBaseVisible[name];
+      r.selOuter.visible = selVisible && outerVisible && partOuterVisible[name];
     }
   }
 
@@ -195,17 +242,28 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     group,
     baseMeshes,
     setOuterVisible(v: boolean) { outerVisible = v; refreshOuter(); },
+    setBaseVisible(v: boolean) {
+      baseVisible = v;
+      for (const name in reg) {
+        reg[name].base.visible = v && partBaseVisible[name];
+        reg[name].grid.visible = v && partBaseVisible[name] && gridVisible;
+      }
+      refreshSelVisibility();
+    },
     setGridVisible(v: boolean) {
       gridVisible = v;
-      for (const name in reg) reg[name].grid.visible = partBaseVisible[name] && v;
+      for (const name in reg) {
+        reg[name].grid.visible = v && baseVisible && partBaseVisible[name];
+      }
+      refreshOuter();   // recalcula la cuadrícula externa
     },
-    // Muestra/oculta una parte SOLO en la capa indicada (interna=base / externa=outer).
     setPartLayerVisible(name: PartName, layer: 'base' | 'outer', v: boolean) {
       if (!(name in reg)) return;
       if (layer === 'base') {
         partBaseVisible[name] = v;
-        reg[name].base.visible = v;
-        reg[name].grid.visible = v && gridVisible;
+        reg[name].base.visible = v && baseVisible;
+        reg[name].grid.visible = v && baseVisible && gridVisible;
+        reg[name].selBase.visible = v && baseVisible && selVisible;
       } else {
         partOuterVisible[name] = v;
         refreshOuter();
@@ -219,7 +277,10 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
       }
     },
     refreshOuter,
+    refreshSelection() { selTex.needsUpdate = true; },
+    setSelectionVisible(v: boolean) { if (selVisible === v) return; selVisible = v; refreshSelVisibility(); },
     dispose() {
+      selTex.dispose();
       for (const d of disposables) d.dispose();
     },
   };

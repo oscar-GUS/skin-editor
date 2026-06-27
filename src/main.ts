@@ -1,9 +1,9 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TEX, type PartSpec, type Rect, type Faces } from './skin';
+import { TEX, buildParts, type PartSpec, type Rect, type Faces } from './skin';
 import { buildSkinModel, type SkinModel, type PoseName, type PartName } from './model';
-import { SkinEditor, type Tool } from './editor';
+import { SkinEditor, type Tool, type SelectMode } from './editor';
 import { STEVE_SKIN } from './steveSkin';
 
 // ── Source skin canvas (compuesto) + texture ─────────────────────────────────
@@ -74,6 +74,13 @@ function commit() {
 
 editor.onChange = () => { commit(); };
 
+// Tras cambiar la selección: redibuja la máscara naranja para el 3D.
+function syncSelection() {
+  editor.fillSelectionMask(selCtx);
+  model.refreshSelection();
+}
+editor.onSelectionChange = syncSelection;
+
 // ── 3D scene ─────────────────────────────────────────────────────────────────
 const viewer = document.getElementById('viewer')!;
 const scene = new THREE.Scene();
@@ -94,19 +101,27 @@ controls.target.set(0, 16, 0);
 controls.enableDamping = true;
 controls.minDistance = 24;
 controls.maxDistance = 90;
-// Pintar siempre activo: izquierdo pinta, derecho orbita, rueda/medio hace zoom.
-controls.enablePan = false;
-controls.mouseButtons = { LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+// Izquierdo SOBRE la skin pinta; izquierdo en vacío desplaza (pan); derecho orbita.
+// El pan/rotación los gestiona OrbitControls; al pintar bloqueamos su pointerdown.
+controls.enablePan = true;
+controls.screenSpacePanning = true;
+controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 renderer.domElement.style.cursor = 'crosshair';
 
+// Canvas de selección (64×64) que el modelo usa como textura naranja en 3D.
+const selCanvas = document.createElement('canvas');
+selCanvas.width = selCanvas.height = TEX;
+const selCtx = selCanvas.getContext('2d')!;
+
 let slim = false;
-let model: SkinModel = buildSkinModel(texture, slim, source);
+let model: SkinModel = buildSkinModel(texture, slim, source, selCanvas);
 scene.add(model.group);
 
 function rebuildModel() {
   scene.remove(model.group);
   model.dispose();
-  model = buildSkinModel(texture, slim, source);
+  model = buildSkinModel(texture, slim, source, selCanvas);
+  model.setBaseVisible(baseVisible);
   model.setOuterVisible(outerVisible);
   model.setGridVisible(gridVisible);
   model.setPose(pose);
@@ -115,6 +130,7 @@ function rebuildModel() {
     model.setPartLayerVisible(name as PartName, 'outer', partVis[name].outer);
   }
   scene.add(model.group);
+  syncSelection();
 }
 
 function resize() {
@@ -128,6 +144,8 @@ resize();
 
 renderer.setAnimationLoop(() => {
   controls.update();
+  // Selección en 3D: parpadeo naranja intermitente (marching ants).
+  model.setSelectionVisible(editor.hasSelection() && Math.floor(performance.now() / 380) % 2 === 0);
   renderer.render(scene, camera);
 });
 
@@ -165,13 +183,17 @@ function pixelFromRaycaster(rc: THREE.Raycaster): { x: number; y: number } | nul
   return { x, y };
 }
 
-function paintFromEvent(e: PointerEvent) {
+function castFromEvent(e: PointerEvent) {
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(ndc, camera);
+}
+
+function paintFromEvent(e: PointerEvent, shift = false) {
+  castFromEvent(e);
   const p = pixelFromRaycaster(raycaster);
-  if (p) editor.paintPixel(p.x, p.y);
+  if (p) editor.paintPixel(p.x, p.y, shift);
   // Simetría: refleja el rayo respecto al plano del eje elegido y pinta el otro lado.
   if (symmetry && (editor.tool === 'pencil' || editor.tool === 'eraser')) {
     const mo = raycaster.ray.origin.clone(), md = raycaster.ray.direction.clone();
@@ -179,38 +201,85 @@ function paintFromEvent(e: PointerEvent) {
     else { mo.z = -mo.z; md.z = -md.z; }
     mirrorRc.set(mo, md.normalize());
     const pm = pixelFromRaycaster(mirrorRc);
-    if (pm) editor.paintPixel(pm.x, pm.y);
+    if (pm) editor.paintPixel(pm.x, pm.y, shift);
   }
 }
 
-// Seleccionar en 3D: clic en una parte selecciona su zona de textura (la marca en
-// el lienzo 2D y limita lo que pintas, tanto en 2D como en 3D).
-function selectFromEvent(e: PointerEvent) {
-  const rect = renderer.domElement.getBoundingClientRect();
-  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible);
-  if (!hit) return;
-  const part = hit.object.userData.part as PartSpec | undefined;
-  if (!part) return;
-  // Bounding box de todas las caras base de la parte en el atlas.
+// ¿El rayo del evento toca la skin visible? (para decidir pintar vs. desplazar)
+function hitsSkin(e: PointerEvent): boolean {
+  castFromEvent(e);
+  return !!pixelFromRaycaster(raycaster);
+}
+
+// Bbox de una capa (base/overlay) de una parte en el atlas.
+function partBBox(part: PartSpec, layer: 'base' | 'overlay'): Rect {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const f of Object.values(part.base) as Rect[]) {
+  for (const f of Object.values(part[layer]) as Rect[]) {
     minX = Math.min(minX, f.x); minY = Math.min(minY, f.y);
     maxX = Math.max(maxX, f.x + f.w); maxY = Math.max(maxY, f.y + f.h);
   }
-  editor.setSelectionRect(minX, minY, maxX - minX, maxY - minY);
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
+// Localiza la parte/cara/capa del atlas que contiene un píxel de textura.
+function hitAtlas(x: number, y: number): { part: PartSpec; layer: 'base' | 'overlay'; faceKey: keyof Faces } | null {
+  const inside = (r: Rect) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+  for (const part of buildParts(slim)) {
+    for (const layer of ['base', 'overlay'] as const) {
+      const faces = part[layer];
+      for (const fk of Object.keys(faces) as (keyof Faces)[]) {
+        if (inside(faces[fk])) return { part, layer, faceKey: fk };
+      }
+    }
+  }
+  return null;
+}
+
+// Selección desde 2D (clic en la textura) para los modos bloque/cara.
+editor.onSelectPart = (x, y, mode) => {
+  const hit = hitAtlas(x, y);
+  if (!hit) return;
+  if (mode === 'face') {
+    const r = hit.part[hit.layer][hit.faceKey];
+    editor.setSelectionRect(r.x, r.y, r.w, r.h);
+  } else {   // part
+    const r = partBBox(hit.part, hit.layer);
+    editor.setSelectionRect(r.x, r.y, r.w, r.h);
+  }
+};
+
+// Seleccionar en 3D: según el modo activo (bloque/cara/color/contiguo).
+function selectFromEvent(e: PointerEvent) {
+  castFromEvent(e);
+  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
+  if (!hit || !hit.uv || !hit.face) return;
+  const part = hit.object.userData.part as PartSpec | undefined;
+  if (!part) return;
+  const faceKey = normalToFace(hit.face.normal);
+  const layer: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
+  const bx = Math.floor(hit.uv.x * TEX), by = Math.floor((1 - hit.uv.y) * TEX);
+  const mode = editor.selectMode;
+  if (mode === 'color') editor.selectByColor(bx, by);
+  else if (mode === 'colorContiguous') editor.selectContiguous(bx, by);
+  else if (mode === 'face') { const r = part[layer][faceKey]; editor.setSelectionRect(r.x, r.y, r.w, r.h); }
+  else { const r = partBBox(part, layer); editor.setSelectionRect(r.x, r.y, r.w, r.h); }   // rect/part → bloque
+}
+
+// Captura: decidimos pintar (y bloquear OrbitControls) o dejar que desplace/orbite.
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0) return;               // izquierdo pinta; derecho orbita
-  if (editor.tool === 'select') { selectFromEvent(e); return; }
-  if (editor.tool === 'gradient') return;   // el degradado se aplica en la textura 2D
-  if (editor.tool !== 'eyedropper') editor.pushUndo();
-  painting3d = editor.tool !== 'eyedropper' && editor.tool !== 'fill';
-  paintFromEvent(e);
-});
+  if (e.button !== 0) return;               // derecho orbita (OrbitControls)
+  const tool = editor.tool;
+  if (tool === 'select') {
+    if (hitsSkin(e)) { selectFromEvent(e); e.stopImmediatePropagation(); }
+    return;                                 // clic en vacío → OrbitControls desplaza
+  }
+  if (tool === 'gradient') return;          // el degradado se aplica en la textura 2D
+  if (!hitsSkin(e)) return;                 // vacío → desplazar (pan)
+  e.stopImmediatePropagation();             // sobre la skin → pintar, sin pan
+  if (tool !== 'eyedropper') editor.pushUndo();
+  painting3d = tool !== 'eyedropper' && tool !== 'fill';
+  paintFromEvent(e, e.shiftKey);
+}, true);
 renderer.domElement.addEventListener('pointermove', (e) => { if (painting3d) paintFromEvent(e); });
 window.addEventListener('pointerup', () => { painting3d = false; });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -220,6 +289,7 @@ renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 // 'outer' pinta la capa externa y deja la interna visible debajo.
 let paintLayer: 'inner' | 'outer' = 'inner';
 let outerVisible = false;          // arranca en interna → externa oculta
+let baseVisible = true;            // visibilidad global de la capa interna
 let gridVisible = false;
 let pose: PoseName = 'reposo';
 // Visibilidad por parte y por capa, independiente.
@@ -236,18 +306,27 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'escape') { editor.clearSelection(); }
 });
 
-// ── Editor de degradado multi-stop (colores con posición, estilo Photoshop) ──
+// ── Editor de degradado multi-stop (color + posición + opacidad, estilo Photoshop) ──
 {
+  const hexToRgba = (hex: string, a: number) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  };
   const bar     = document.getElementById('grad-bar')!;
   const colorIn = document.getElementById('grad-stop-color') as HTMLInputElement;
   const posIn   = document.getElementById('grad-stop-pos') as HTMLInputElement;
+  const aIn     = document.getElementById('grad-stop-a') as HTMLInputElement;
+  const decBtn  = document.getElementById('grad-pos-dec') as HTMLButtonElement;
+  const incBtn  = document.getElementById('grad-pos-inc') as HTMLButtonElement;
   const delBtn  = document.getElementById('grad-stop-del') as HTMLButtonElement;
   let sel = 0;
   const stops = () => editor.gradStops;
 
   function renderGrad() {
     const ss = [...stops()].sort((a, b) => a.pos - b.pos);
-    bar.style.background = `linear-gradient(to right, ${ss.map(s => `${s.color} ${Math.round(s.pos * 100)}%`).join(', ')})`;
+    bar.style.background =
+      `linear-gradient(to right, ${ss.map(s => `${hexToRgba(s.color, s.a)} ${Math.round(s.pos * 100)}%`).join(', ')}),` +
+      `repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 10px 10px`;
     bar.querySelectorAll('.grad-mark').forEach(m => m.remove());
     stops().forEach((s, i) => {
       const m = document.createElement('div');
@@ -258,7 +337,11 @@ window.addEventListener('keydown', (e) => {
       bar.appendChild(m);
     });
     const cur = stops()[sel];
-    if (cur) { colorIn.value = cur.color; posIn.value = String(Math.round(cur.pos * 100)); }
+    if (cur) {
+      colorIn.value = cur.color;
+      posIn.value = String(Math.round(cur.pos * 100));
+      aIn.value = String(Math.round(cur.a * 100));
+    }
     delBtn.disabled = stops().length <= 2;
   }
   const select = (i: number) => { sel = Math.max(0, Math.min(stops().length - 1, i)); renderGrad(); };
@@ -266,6 +349,7 @@ window.addEventListener('keydown', (e) => {
     const r = bar.getBoundingClientRect();
     return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
   };
+  const setPos = (p: number) => { if (stops()[sel]) { stops()[sel].pos = Math.max(0, Math.min(1, p)); renderGrad(); } };
 
   let dragIdx = -1;
   bar.addEventListener('pointerdown', (e) => {
@@ -274,7 +358,7 @@ window.addEventListener('keydown', (e) => {
       dragIdx = +t.dataset.idx!;
       select(dragIdx);
     } else {
-      stops().push({ color: colorIn.value || '#ffffff', pos: posFromEvent(e) });
+      stops().push({ color: colorIn.value || '#ffffff', pos: posFromEvent(e), a: 1 });
       select(stops().length - 1);
     }
     bar.setPointerCapture(e.pointerId);
@@ -287,7 +371,10 @@ window.addEventListener('keydown', (e) => {
   bar.addEventListener('pointerup', () => { dragIdx = -1; });
 
   colorIn.addEventListener('input', () => { if (stops()[sel]) { stops()[sel].color = colorIn.value; renderGrad(); } });
-  posIn.addEventListener('input', () => { if (stops()[sel]) { stops()[sel].pos = Math.max(0, Math.min(100, +posIn.value)) / 100; renderGrad(); } });
+  aIn.addEventListener('input', () => { if (stops()[sel]) { stops()[sel].a = Math.max(0, Math.min(100, +aIn.value)) / 100; renderGrad(); } });
+  posIn.addEventListener('input', () => setPos((+posIn.value || 0) / 100));
+  decBtn.addEventListener('click', () => setPos((stops()[sel]?.pos ?? 0) - 0.01));
+  incBtn.addEventListener('click', () => setPos((stops()[sel]?.pos ?? 0) + 0.01));
   delBtn.addEventListener('click', () => {
     if (stops().length <= 2) return;
     stops().splice(sel, 1);
@@ -297,16 +384,41 @@ window.addEventListener('keydown', (e) => {
   renderGrad();
 }
 
-// tools
-const gradPanel = document.getElementById('grad-panel')!;
+// tools — cada herramienta enseña solo las opciones que le aplican.
+function showEl(id: string, v: boolean) { const e = document.getElementById(id); if (e) (e as HTMLElement).hidden = !v; }
+function updateToolUI(tool: Tool) {
+  const brush = tool === 'pencil' || tool === 'eraser';
+  showEl('brush-panel', tool !== 'eyedropper' && tool !== 'select');
+  showEl('row-size', brush);
+  showEl('row-shape', brush);
+  showEl('row-feather', brush);
+  showEl('row-opacity', tool === 'pencil' || tool === 'eraser' || tool === 'fill' || tool === 'gradient');
+  showEl('row-blend', tool === 'pencil');
+  showEl('row-toggles', brush);
+  showEl('grad-panel', tool === 'gradient');
+  showEl('select-panel', tool === 'select');
+}
 document.querySelectorAll<HTMLButtonElement>('.tool').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     editor.tool = btn.dataset.tool as Tool;
-    gradPanel.hidden = btn.dataset.tool !== 'gradient';   // colores A/B solo con degradado
+    updateToolUI(editor.tool);
   });
 });
+updateToolUI(editor.tool);
+
+// Modos de selección + acciones (copiar / pegar / quitar).
+document.querySelectorAll<HTMLButtonElement>('#select-modes button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#select-modes button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    editor.selectMode = btn.dataset.selmode as SelectMode;
+  });
+});
+document.getElementById('sel-copy')!.addEventListener('click', () => editor.copySelection());
+document.getElementById('sel-paste')!.addEventListener('click', () => editor.pasteSelection());
+document.getElementById('sel-clear')!.addEventListener('click', () => editor.clearSelection());
 
 // ── Colores recientes (10 slots; el último usado primero) ────────────────────
 const RECENTS_MAX = 10;
@@ -563,16 +675,31 @@ document.querySelectorAll<HTMLButtonElement>('#model-toggle button').forEach(btn
   btn.addEventListener('click', () => setSlim(btn.dataset.model === 'alex'));
 });
 
-// capa visible (interna / externa) — en el HUD del visor
-document.querySelectorAll<HTMLButtonElement>('#layer-toggle button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#layer-toggle button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    paintLayer = btn.dataset.layer === 'outer' ? 'outer' : 'inner';
-    // Interna oculta la externa (para verla/pintarla); externa la muestra y deja la interna debajo.
-    outerVisible = paintLayer === 'outer';
-    model.setOuterVisible(outerVisible);
-    syncPartHud();
+// Capa de trabajo (HUD del visor): filas tipo Photoshop con ojo de visibilidad.
+// Clic en la fila = elegir capa a pintar (y mostrarla). Clic en el ojo = ver/ocultar.
+function setEye(which: 'inner' | 'outer', on: boolean) {
+  const eye = document.querySelector(`#layer-toggle .hud-eye[data-eye="${which}"]`);
+  if (eye) eye.classList.toggle('off', !on);
+}
+function setPaintLayer(layer: 'inner' | 'outer') {
+  paintLayer = layer;
+  document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(r =>
+    r.classList.toggle('active', r.dataset.layer === layer));
+  if (layer === 'outer') { outerVisible = true; model.setOuterVisible(true); setEye('outer', true); }
+  else { baseVisible = true; model.setBaseVisible(true); setEye('inner', true); }
+  syncPartHud();
+}
+document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(row => {
+  row.addEventListener('click', () => setPaintLayer(row.dataset.layer as 'inner' | 'outer'));
+});
+document.querySelectorAll<HTMLButtonElement>('#layer-toggle .hud-eye').forEach(eye => {
+  eye.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const which = eye.dataset.eye as 'inner' | 'outer';
+    const on = eye.classList.contains('off');   // estaba apagado → encender
+    eye.classList.toggle('off', on ? false : true);
+    if (which === 'outer') { outerVisible = on; model.setOuterVisible(on); }
+    else { baseVisible = on; model.setBaseVisible(on); }
   });
 });
 
@@ -744,6 +871,45 @@ window.addEventListener('drop', (e) => {
   const file = Array.from(e.dataTransfer?.files ?? []).find(f => f.type.startsWith('image/'));
   if (file) loadSkin(file);
 });
+
+// ── Redimensionar columnas laterales (arrastre, responsive con centro mínimo) ─
+{
+  const layout = document.getElementById('layout')!;
+  const minLeft = 200, maxLeft = 480, minRight = 220, maxRight = 500, minCenter = 320;
+  const cssVar = (name: string) => parseFloat(getComputedStyle(layout).getPropertyValue(name));
+  const drag = (handle: HTMLElement, side: 'left' | 'right') => {
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      handle.classList.add('dragging');
+      handle.setPointerCapture(e.pointerId);
+      const move = (ev: PointerEvent) => {
+        const r = layout.getBoundingClientRect();
+        if (side === 'left') {
+          const right = cssVar('--right-w') || 320;
+          let w = Math.max(minLeft, Math.min(maxLeft, ev.clientX - r.left));
+          if (r.width - w - right < minCenter) w = r.width - right - minCenter;
+          layout.style.setProperty('--left-w', w + 'px');
+        } else {
+          const left = cssVar('--left-w') || 300;
+          let w = Math.max(minRight, Math.min(maxRight, r.right - ev.clientX));
+          if (r.width - w - left < minCenter) w = r.width - left - minCenter;
+          layout.style.setProperty('--right-w', w + 'px');
+        }
+        resize();
+      };
+      const up = () => {
+        handle.classList.remove('dragging');
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        resize();
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  };
+  drag(document.getElementById('resize-left') as HTMLElement, 'left');
+  drag(document.getElementById('resize-right') as HTMLElement, 'right');
+}
 
 // ── Init: capa base con la skin Steve por defecto ────────────────────────────
 layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true, blend: 'source-over' }];
