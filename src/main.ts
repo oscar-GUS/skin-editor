@@ -180,13 +180,23 @@ let gridVisible = false;
 let pose: PoseName = 'reposo';
 const partVisible: Record<string, boolean> = {};
 
-// undo (Ctrl/Cmd+Z)
+// atajos: deshacer, copiar/pegar selección, quitar selección
 window.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
-    e.preventDefault();
-    editor.undo();
-  }
+  const mod = e.ctrlKey || e.metaKey;
+  const k = e.key.toLowerCase();
+  if (mod && k === 'z' && !e.shiftKey) { e.preventDefault(); editor.undo(); }
+  else if (mod && k === 'c') { e.preventDefault(); editor.copySelection(); }
+  else if (mod && k === 'v') { e.preventDefault(); editor.pasteSelection(); }
+  else if (k === 'escape') { editor.clearSelection(); }
 });
+
+// colores A/B del degradado
+const gradA = document.getElementById('grad-a') as HTMLInputElement;
+const gradB = document.getElementById('grad-b') as HTMLInputElement;
+editor.gradColorA = gradA.value;
+editor.gradColorB = gradB.value;
+gradA.addEventListener('input', () => { editor.gradColorA = gradA.value; });
+gradB.addEventListener('input', () => { editor.gradColorB = gradB.value; });
 
 // tools
 const gradPanel = document.getElementById('grad-panel')!;
