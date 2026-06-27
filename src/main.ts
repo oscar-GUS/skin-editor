@@ -1,8 +1,8 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TEX } from './skin';
-import { buildSkinModel, type SkinModel } from './model';
+import { TEX, type Faces, type PartSpec } from './skin';
+import { buildSkinModel, type SkinModel, type PoseName } from './model';
 import { SkinEditor, type Tool } from './editor';
 import { STEVE_SKIN } from './steveSkin';
 
@@ -24,13 +24,19 @@ steveImg.onload = () => {
   ctx.drawImage(steveImg, 0, 0, TEX, TEX);
   texture.needsUpdate = true;
   editor.render();
+  model.refreshOuter();
+  updateSkinColors();
 };
 steveImg.src = STEVE_SKIN;
 
 // ── 2D editor ────────────────────────────────────────────────────────────────
 const editorCanvas = document.getElementById('editor') as HTMLCanvasElement;
 const editor = new SkinEditor(source, editorCanvas);
-editor.onChange = () => { texture.needsUpdate = true; };
+editor.onChange = () => {
+  texture.needsUpdate = true;
+  model.refreshOuter();
+  scheduleSkinColors();
+};
 
 // ── 3D scene ─────────────────────────────────────────────────────────────────
 const viewer = document.getElementById('viewer')!;
@@ -54,15 +60,16 @@ controls.minDistance = 24;
 controls.maxDistance = 90;
 
 let slim = false;
-let model: SkinModel = buildSkinModel(texture, slim);
+let model: SkinModel = buildSkinModel(texture, slim, source);
 scene.add(model.group);
 
 function rebuildModel() {
   scene.remove(model.group);
   model.dispose();
-  model = buildSkinModel(texture, slim);
+  model = buildSkinModel(texture, slim, source);
   model.setOuterVisible(outerVisible);
   model.setGridVisible(gridVisible);
+  model.setPose(pose);
   scene.add(model.group);
 }
 
@@ -83,21 +90,38 @@ renderer.setAnimationLoop(() => {
 // ── 3D painting ──────────────────────────────────────────────────────────────
 let paint3d = false;
 let painting3d = false;
+let paintLayer: 'base' | 'outer' = 'base';
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
+
+function normalToFace(n: THREE.Vector3): keyof Faces {
+  const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+  if (ax >= ay && ax >= az) return n.x > 0 ? 'left' : 'right';
+  if (ay >= ax && ay >= az) return n.y > 0 ? 'top' : 'bottom';
+  return n.z > 0 ? 'front' : 'back';
+}
 
 function paintFromEvent(e: PointerEvent) {
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(ndc, camera);
-  // Raycaster doesn't skip invisible meshes, so ignore hidden layers explicitly
-  // and take the nearest visible face.
-  const hit = raycaster.intersectObjects(model.group.children, false)
-    .find(h => h.object.visible && h.uv);
-  if (!hit || !hit.uv) return;
-  const x = Math.floor(hit.uv.x * TEX);
-  const y = Math.floor((1 - hit.uv.y) * TEX);
+  // Siempre lanzamos contra la capa base (visible); la capa a escribir la decide
+  // paintLayer, así se puede pintar el exterior aunque esté transparente.
+  const hit = raycaster.intersectObjects(model.baseMeshes, false)
+    .find(h => h.uv && h.face);
+  if (!hit || !hit.uv || !hit.face) return;
+  const part = hit.object.userData.part as PartSpec;
+  const faceKey = normalToFace(hit.face.normal);
+  const fx = hit.uv.x * TEX, fy = (1 - hit.uv.y) * TEX;
+  let x: number, y: number;
+  if (paintLayer === 'outer') {
+    const base = part.base[faceKey], ov = part.overlay[faceKey];
+    x = ov.x + Math.min(base.w - 1, Math.max(0, Math.floor(fx - base.x)));
+    y = ov.y + Math.min(base.h - 1, Math.max(0, Math.floor(fy - base.y)));
+  } else {
+    x = Math.floor(fx); y = Math.floor(fy);
+  }
   if (x < 0 || y < 0 || x >= TEX || y >= TEX) return;
   editor.paintPixel(x, y);
 }
@@ -114,6 +138,7 @@ window.addEventListener('pointerup', () => { painting3d = false; });
 // ── UI wiring ────────────────────────────────────────────────────────────────
 let outerVisible = true;
 let gridVisible = false;
+let pose: PoseName = 'reposo';
 
 // undo (Ctrl/Cmd+Z)
 window.addEventListener('keydown', (e) => {
@@ -222,6 +247,49 @@ paint3dChk.addEventListener('change', () => {
 });
 renderer.domElement.addEventListener('contextmenu', (e) => { if (paint3d) e.preventDefault(); });
 
+// capa a pintar en 3D (base / exterior)
+document.querySelectorAll<HTMLButtonElement>('#paint-layer button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#paint-layer button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    paintLayer = btn.dataset.layer as 'base' | 'outer';
+  });
+});
+
+// poses
+const poseSel = document.getElementById('pose') as HTMLSelectElement;
+poseSel.addEventListener('change', () => { pose = poseSel.value as PoseName; model.setPose(pose); });
+
+// ── Colores presentes en la skin ─────────────────────────────────────────────
+const skinColorsEl = document.getElementById('skin-colors')!;
+let skinColorsTimer = 0;
+function scheduleSkinColors() {
+  clearTimeout(skinColorsTimer);
+  skinColorsTimer = window.setTimeout(updateSkinColors, 120);
+}
+function updateSkinColors() {
+  const img = source.getContext('2d')!.getImageData(0, 0, TEX, TEX).data;
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (let i = 0; i < img.length; i += 4) {
+    if (img[i + 3] === 0) continue;
+    const hex = '#' + [img[i], img[i + 1], img[i + 2]].map(v => v.toString(16).padStart(2, '0')).join('');
+    if (seen.has(hex)) continue;
+    seen.add(hex);
+    list.push(hex);
+    if (list.length >= 64) break;
+  }
+  skinColorsEl.replaceChildren();
+  for (const hex of list) {
+    const b = document.createElement('button');
+    b.className = 'skin-color';
+    b.style.background = hex;
+    b.title = hex;
+    b.addEventListener('click', () => setColor(hex));
+    skinColorsEl.appendChild(b);
+  }
+}
+
 // import — carga un PNG como skin (lo dibuja a 64×64 en el canvas fuente).
 function loadSkin(file: File) {
   const img = new Image();
@@ -232,6 +300,8 @@ function loadSkin(file: File) {
     ctx.drawImage(img, 0, 0, TEX, TEX);
     texture.needsUpdate = true;
     editor.render();
+    model.refreshOuter();
+    updateSkinColors();
     URL.revokeObjectURL(img.src);
   };
   img.src = URL.createObjectURL(file);

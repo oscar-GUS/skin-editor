@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildParts, TEX, type Faces, type Rect } from './skin';
+import { buildParts, TEX, type Faces, type Rect, type PartSpec } from './skin';
 
 // Geometry face order in three.js BoxGeometry groups: px, nx, py, ny, pz, nz.
 // We map: +X→left, -X→right, +Y→top, -Y→bottom, +Z→front, -Z→back.
@@ -24,10 +24,32 @@ function applyUV(geo: THREE.BoxGeometry, faces: Faces) {
   uv.needsUpdate = true;
 }
 
+export type PoseName = 'reposo' | 'andar' | 'correr' | 'saludar' | 'sentado' | 'tpose';
+
+// Rotación [x,y,z] por articulación. Las que no aparecen quedan a 0.
+const POSES: Record<PoseName, Partial<Record<string, [number, number, number]>>> = {
+  reposo:  {},
+  andar:   { rightArm: [0.5, 0, 0],  leftArm: [-0.5, 0, 0], rightLeg: [-0.5, 0, 0], leftLeg: [0.5, 0, 0] },
+  correr:  { rightArm: [1.1, 0, 0],  leftArm: [-1.1, 0, 0], rightLeg: [-1.0, 0, 0], leftLeg: [1.0, 0, 0] },
+  saludar: { leftArm: [0, 0, -2.6],  rightArm: [0.2, 0, 0] },
+  sentado: { rightLeg: [-1.5, 0, 0], leftLeg: [-1.5, 0, 0], rightArm: [-0.25, 0, 0], leftArm: [-0.25, 0, 0] },
+  tpose:   { rightArm: [0, 0, 1.5708], leftArm: [0, 0, -1.5708] },
+};
+
+// Articulación (hombro/cadera) de cada miembro, en coords de modelo.
+function jointFor(name: string, pos: [number, number, number]): [number, number, number] | null {
+  if (name === 'rightArm' || name === 'leftArm') return [pos[0], 24, 0]; // hombro
+  if (name === 'rightLeg' || name === 'leftLeg') return [pos[0], 12, 0]; // cadera
+  return null;
+}
+
 export interface SkinModel {
   group: THREE.Group;
+  baseMeshes: THREE.Mesh[];
   setOuterVisible(v: boolean): void;
   setGridVisible(v: boolean): void;
+  setPose(name: PoseName): void;
+  refreshOuter(): void;   // recalcula qué capas exteriores están vacías
   dispose(): void;
 }
 
@@ -57,13 +79,20 @@ function getGridTexture(): THREE.Texture {
   return tex;
 }
 
-export function buildSkinModel(texture: THREE.Texture, slim: boolean): SkinModel {
+export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HTMLCanvasElement): SkinModel {
   const group = new THREE.Group();
-  const outer: THREE.Mesh[] = [];
+  const baseMeshes: THREE.Mesh[] = [];
   const grid: THREE.Mesh[] = [];
+  const outerEntries: { mesh: THREE.Mesh; overlay: Faces }[] = [];
+  const pivots: Record<string, THREE.Group> = {};
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
-  const baseMat = new THREE.MeshStandardMaterial({ map: texture, roughness: 1, metalness: 0 });
+  // Base: alpha-tested + doble cara, para que al borrar (alpha 0) deje el hueco
+  // transparente de verdad en el 3D en vez de pintarlo negro.
+  const baseMat = new THREE.MeshStandardMaterial({
+    map: texture, roughness: 1, metalness: 0,
+    alphaTest: 0.5, side: THREE.DoubleSide,
+  });
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
     transparent: true, alphaTest: 0.01, side: THREE.DoubleSide, depthWrite: false,
@@ -76,37 +105,84 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean): SkinModel
   for (const part of buildParts(slim)) {
     const [w, h, d] = part.size;
 
+    // Las extremidades cuelgan de un pivote en la articulación para poder posar.
+    const joint = jointFor(part.name, part.pos);
+    let container: THREE.Object3D = group;
+    let local: [number, number, number] = part.pos;
+    if (joint) {
+      const pivot = new THREE.Group();
+      pivot.position.set(joint[0], joint[1], joint[2]);
+      group.add(pivot);
+      pivots[part.name] = pivot;
+      container = pivot;
+      local = [part.pos[0] - joint[0], part.pos[1] - joint[1], part.pos[2] - joint[2]];
+    }
+
     const baseGeo = new THREE.BoxGeometry(w, h, d);
     applyUV(baseGeo, part.base);
     const baseMesh = new THREE.Mesh(baseGeo, baseMat);
-    baseMesh.position.set(...part.pos);
-    group.add(baseMesh);
+    baseMesh.position.set(...local);
+    baseMesh.userData.part = part as PartSpec;
+    container.add(baseMesh);
+    baseMeshes.push(baseMesh);
     disposables.push(baseGeo);
 
     const outerGeo = new THREE.BoxGeometry(w + 1, h + 1, d + 1);
     applyUV(outerGeo, part.overlay);
     const outerMesh = new THREE.Mesh(outerGeo, outerMat);
-    outerMesh.position.set(...part.pos);
-    group.add(outerMesh);
-    outer.push(outerMesh);
+    outerMesh.position.set(...local);
+    container.add(outerMesh);
+    outerEntries.push({ mesh: outerMesh, overlay: part.overlay });
     disposables.push(outerGeo);
 
     // grid overlay: same UVs as the base, slightly inflated to avoid z-fighting
     const gridGeo = new THREE.BoxGeometry(w + 0.06, h + 0.06, d + 0.06);
     applyUV(gridGeo, part.base);
     const gridMesh = new THREE.Mesh(gridGeo, gridMat);
-    gridMesh.position.set(...part.pos);
+    gridMesh.position.set(...local);
     gridMesh.visible = false;
     gridMesh.renderOrder = 2;
-    group.add(gridMesh);
+    container.add(gridMesh);
     grid.push(gridMesh);
     disposables.push(gridGeo);
   }
 
+  let outerVisible = true;
+  const srcCtx = source.getContext('2d', { willReadFrequently: true })!;
+
+  // ¿Tiene la capa exterior de esta parte algún pixel no transparente?
+  function overlayHasContent(img: ImageData, overlay: Faces): boolean {
+    for (const k of FACE_ORDER) {
+      const r = overlay[k];
+      for (let yy = r.y; yy < r.y + r.h; yy++) {
+        for (let xx = r.x; xx < r.x + r.w; xx++) {
+          if (img.data[(yy * TEX + xx) * 4 + 3] !== 0) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function refreshOuter() {
+    const img = srcCtx.getImageData(0, 0, TEX, TEX);
+    for (const { mesh, overlay } of outerEntries) {
+      mesh.visible = outerVisible && overlayHasContent(img, overlay);
+    }
+  }
+
   return {
     group,
-    setOuterVisible(v: boolean) { outer.forEach(m => (m.visible = v)); },
+    baseMeshes,
+    setOuterVisible(v: boolean) { outerVisible = v; refreshOuter(); },
     setGridVisible(v: boolean) { grid.forEach(m => (m.visible = v)); },
+    setPose(name: PoseName) {
+      const p = POSES[name] ?? {};
+      for (const k in pivots) {
+        const r = p[k] ?? [0, 0, 0];
+        pivots[k].rotation.set(r[0], r[1], r[2]);
+      }
+    },
+    refreshOuter,
     dispose() {
       for (const d of disposables) d.dispose();
     },

@@ -41,6 +41,11 @@
         <div class="recents" id="recents"></div>
       </div>
 
+      <div class="recents-wrap">
+        <span class="recents-label">Colores en la skin</span>
+        <div class="skin-colors" id="skin-colors"></div>
+      </div>
+
       <div class="canvas-wrap">
         <canvas id="editor"></canvas>
       </div>
@@ -57,6 +62,20 @@
         <label class="check"><input type="checkbox" id="layer-outer" checked> Capa exterior</label>
         <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
         <label class="check"><input type="checkbox" id="paint3d"> Pintar en 3D</label>
+        <div class="seg" id="paint-layer" title="Capa que pintas en 3D">
+          <button data-layer="base" class="active">Base</button>
+          <button data-layer="outer">Exterior</button>
+        </div>
+        <label class="check pose-field">Pose
+          <select id="pose">
+            <option value="reposo">Reposo</option>
+            <option value="andar">Andar</option>
+            <option value="correr">Correr</option>
+            <option value="saludar">Saludar</option>
+            <option value="sentado">Sentado</option>
+            <option value="tpose">T-pose</option>
+          </select>
+        </label>
       </div>
       <div id="viewer">
         <div id="ref-panel" hidden>
