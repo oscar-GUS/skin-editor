@@ -51,21 +51,36 @@
       </div>
 
       <label class="check"><input type="checkbox" id="grid" checked> Cuadrícula</label>
+
+      <div class="layers-wrap">
+        <div class="section-head">
+          <span class="recents-label">Capas</span>
+          <button id="layer-add" class="mini-btn">+ Capa</button>
+        </div>
+        <div class="layers" id="layers"></div>
+      </div>
+
+      <div class="skinbase-wrap">
+        <span class="recents-label">Skin base</span>
+        <div class="skinbase-row" id="skin-presets">
+          <button data-skin="steve">Steve</button>
+          <button data-skin="alex" class="active">Alex</button>
+        </div>
+        <div class="skinbase-actions">
+          <button id="skin-upload">Subir la tuya</button>
+          <button id="skin-reset">Resetear a la base</button>
+        </div>
+      </div>
     </aside>
 
     <main class="viewer-pane">
       <div class="viewer-toolbar">
-        <div class="seg" id="model-toggle">
-          <button data-model="steve" class="active">Steve</button>
-          <button data-model="alex">Alex</button>
+        <div class="seg" id="model-toggle" title="Ancho de brazos">
+          <button data-model="steve">Steve</button>
+          <button data-model="alex" class="active">Alex</button>
         </div>
         <label class="check"><input type="checkbox" id="layer-outer" checked> Capa exterior</label>
         <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
-        <label class="check"><input type="checkbox" id="paint3d"> Pintar en 3D</label>
-        <div class="seg" id="paint-layer" title="Capa que pintas en 3D">
-          <button data-layer="base" class="active">Base</button>
-          <button data-layer="outer">Exterior</button>
-        </div>
         <label class="check pose-field">Pose
           <select id="pose">
             <option value="reposo">Reposo</option>

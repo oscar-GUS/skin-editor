@@ -110,6 +110,47 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .recent.empty { cursor: default; opacity: 0.4; background:
   repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 8px 8px; }
 
+/* ── Capas (estilo Photoshop) ───────────────────── */
+.section-head { display: flex; align-items: center; justify-content: space-between; }
+.mini-btn {
+  padding: 3px 9px; font-size: 12px; font-weight: 600;
+  color: var(--accent); background: rgba(244,129,31,0.1);
+  border: 1px solid rgba(244,129,31,0.4); border-radius: var(--radius-sm);
+}
+.mini-btn:hover { background: rgba(244,129,31,0.18); border-color: var(--accent); }
+.layers-wrap { display: flex; flex-direction: column; gap: 6px; }
+.layers { display: flex; flex-direction: column; gap: 4px; }
+.layer-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 7px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer;
+}
+.layer-row:hover { border-color: #3a3a3e; }
+.layer-row.active { border-color: var(--accent); background: #1e1810; }
+.layer-eye {
+  padding: 0; width: 24px; height: 24px; font-size: 13px;
+  background: none; border: none; flex-shrink: 0;
+}
+.layer-eye.off { opacity: 0.45; }
+.layer-name { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.layer-mini {
+  padding: 0; width: 22px; height: 22px; font-size: 11px; flex-shrink: 0;
+  background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text-sec);
+}
+.layer-mini:hover:not(:disabled) { border-color: #3a3a3e; color: var(--text); }
+.layer-mini:disabled { opacity: 0.3; cursor: default; }
+.layer-del:hover:not(:disabled) { border-color: #c0392b; color: #e0584a; }
+
+/* ── Skin base ──────────────────────────────────── */
+.skinbase-wrap { display: flex; flex-direction: column; gap: 7px; }
+.skinbase-row { display: flex; gap: 6px; }
+.skinbase-row button { flex: 1; padding: 7px; font-weight: 600; }
+.skinbase-row button.active { border-color: var(--accent); background: #1e1810; color: var(--text); }
+.skinbase-actions { display: flex; gap: 6px; }
+.skinbase-actions button { flex: 1; padding: 7px; font-size: 12px; }
+#skin-reset { color: var(--yellow); border-color: rgba(242,175,13,0.4); }
+#skin-reset:hover { border-color: var(--yellow); background: rgba(242,175,13,0.1); }
+
 /* ── Colores presentes en la skin ───────────────── */
 .skin-colors { display: flex; flex-wrap: wrap; gap: 4px; }
 .skin-color {

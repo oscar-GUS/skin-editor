@@ -1,12 +1,12 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TEX, type Faces, type PartSpec } from './skin';
+import { TEX, createDefaultSkin, ALEX_PALETTE } from './skin';
 import { buildSkinModel, type SkinModel, type PoseName, type PartName } from './model';
 import { SkinEditor, type Tool } from './editor';
 import { STEVE_SKIN } from './steveSkin';
 
-// ── Source skin canvas + texture ─────────────────────────────────────────────
+// ── Source skin canvas (compuesto) + texture ─────────────────────────────────
 const source = document.createElement('canvas');
 source.width = TEX;
 source.height = TEX;
@@ -15,28 +15,34 @@ texture.magFilter = THREE.NearestFilter;
 texture.minFilter = THREE.NearestFilter;
 texture.colorSpace = THREE.SRGBColorSpace;
 
-// default skin: classic Steve
-const steveImg = new Image();
-steveImg.onload = () => {
-  const ctx = source.getContext('2d')!;
-  ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, TEX, TEX);
-  ctx.drawImage(steveImg, 0, 0, TEX, TEX);
-  texture.needsUpdate = true;
-  editor.render();
-  model.refreshOuter();
-  updateSkinColors();
-};
-steveImg.src = STEVE_SKIN;
+function blankCanvas(): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = TEX; c.height = TEX;
+  return c;
+}
 
 // ── 2D editor ────────────────────────────────────────────────────────────────
 const editorCanvas = document.getElementById('editor') as HTMLCanvasElement;
 const editor = new SkinEditor(source, editorCanvas);
-editor.onChange = () => {
+
+// Recompone el compuesto (source) a partir de las capas visibles, de abajo arriba.
+function recomposite() {
+  const ctx = source.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, TEX, TEX);
+  for (const l of layers) if (l.visible) ctx.drawImage(l.canvas, 0, 0);
+}
+
+// Tras cualquier cambio en capas/pintura: recompone, sube a 3D y refresca UI.
+function commit() {
+  recomposite();
   texture.needsUpdate = true;
   model.refreshOuter();
+  editor.render();
   scheduleSkinColors();
-};
+}
+
+editor.onChange = () => { commit(); };
 
 // ── 3D scene ─────────────────────────────────────────────────────────────────
 const viewer = document.getElementById('viewer')!;
@@ -58,8 +64,12 @@ controls.target.set(0, 16, 0);
 controls.enableDamping = true;
 controls.minDistance = 24;
 controls.maxDistance = 90;
+// Pintar siempre activo: izquierdo pinta, derecho orbita, rueda/medio hace zoom.
+controls.enablePan = false;
+controls.mouseButtons = { LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+renderer.domElement.style.cursor = 'crosshair';
 
-let slim = false;
+let slim = true;
 let model: SkinModel = buildSkinModel(texture, slim, source);
 scene.add(model.group);
 
@@ -88,53 +98,34 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 
-// ── 3D painting ──────────────────────────────────────────────────────────────
-let paint3d = false;
+// ── 3D painting (siempre activo, botón izquierdo) ─────────────────────────────
 let painting3d = false;
-let paintLayer: 'base' | 'outer' = 'base';
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
-
-function normalToFace(n: THREE.Vector3): keyof Faces {
-  const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
-  if (ax >= ay && ax >= az) return n.x > 0 ? 'left' : 'right';
-  if (ay >= ax && ay >= az) return n.y > 0 ? 'top' : 'bottom';
-  return n.z > 0 ? 'front' : 'back';
-}
 
 function paintFromEvent(e: PointerEvent) {
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(ndc, camera);
-  // Siempre lanzamos contra la capa base (visible); la capa a escribir la decide
-  // paintLayer, así se puede pintar el exterior aunque esté transparente.
   const hit = raycaster.intersectObjects(model.baseMeshes, false)
-    .find(h => h.object.visible && h.uv && h.face);
-  if (!hit || !hit.uv || !hit.face) return;
-  const part = hit.object.userData.part as PartSpec;
-  const faceKey = normalToFace(hit.face.normal);
-  const fx = hit.uv.x * TEX, fy = (1 - hit.uv.y) * TEX;
-  let x: number, y: number;
-  if (paintLayer === 'outer') {
-    const base = part.base[faceKey], ov = part.overlay[faceKey];
-    x = ov.x + Math.min(base.w - 1, Math.max(0, Math.floor(fx - base.x)));
-    y = ov.y + Math.min(base.h - 1, Math.max(0, Math.floor(fy - base.y)));
-  } else {
-    x = Math.floor(fx); y = Math.floor(fy);
-  }
+    .find(h => h.object.visible && h.uv);
+  if (!hit || !hit.uv) return;
+  const x = Math.floor(hit.uv.x * TEX);
+  const y = Math.floor((1 - hit.uv.y) * TEX);
   if (x < 0 || y < 0 || x >= TEX || y >= TEX) return;
   editor.paintPixel(x, y);
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (!paint3d || e.button !== 0) return;   // pintar solo con izquierdo; derecho = orbitar
+  if (e.button !== 0) return;               // izquierdo pinta; derecho orbita
   if (editor.tool !== 'eyedropper') editor.pushUndo();
   painting3d = editor.tool !== 'eyedropper' && editor.tool !== 'fill';
   paintFromEvent(e);
 });
-renderer.domElement.addEventListener('pointermove', (e) => { if (paint3d && painting3d) paintFromEvent(e); });
+renderer.domElement.addEventListener('pointermove', (e) => { if (painting3d) paintFromEvent(e); });
 window.addEventListener('pointerup', () => { painting3d = false; });
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ── UI wiring ────────────────────────────────────────────────────────────────
 let outerVisible = true;
@@ -214,49 +205,159 @@ for (const hex of PALETTE) {
   swatches.appendChild(s);
 }
 
-// grid
+// grid 2D
 const gridChk = document.getElementById('grid') as HTMLInputElement;
 gridChk.addEventListener('change', () => { editor.showGrid = gridChk.checked; editor.render(); });
 
-// model toggle
-document.querySelectorAll<HTMLButtonElement>('#model-toggle button').forEach(btn => {
+// ── Capas (estilo Photoshop) ─────────────────────────────────────────────────
+interface Layer { id: number; name: string; canvas: HTMLCanvasElement; visible: boolean; }
+let layers: Layer[] = [];     // índice 0 = base (abajo); el último = arriba del todo
+let activeId = 0;
+let nextId = 1;
+const baseImage = blankCanvas();   // base "limpia" para resetear
+
+const layersEl = document.getElementById('layers')!;
+
+function activeLayer(): Layer { return layers.find(l => l.id === activeId) ?? layers[0]; }
+
+function setActive(id: number) {
+  activeId = id;
+  editor.setTarget(activeLayer().canvas);
+  renderLayers();
+}
+
+function renderLayers() {
+  layersEl.replaceChildren();
+  // De arriba (último) hacia abajo (base), como Photoshop.
+  for (let i = layers.length - 1; i >= 0; i--) {
+    const l = layers[i];
+    const isBase = i === 0;
+    const row = document.createElement('div');
+    row.className = 'layer-row' + (l.id === activeId ? ' active' : '');
+
+    const eye = document.createElement('button');
+    eye.className = 'layer-eye' + (l.visible ? '' : ' off');
+    eye.title = l.visible ? 'Ocultar' : 'Mostrar';
+    eye.textContent = l.visible ? '👁' : '🚫';
+    eye.addEventListener('click', (ev) => { ev.stopPropagation(); l.visible = !l.visible; renderLayers(); commit(); });
+
+    const name = document.createElement('span');
+    name.className = 'layer-name';
+    name.textContent = l.name;
+
+    const up = document.createElement('button');
+    up.className = 'layer-mini'; up.textContent = '▲'; up.title = 'Subir';
+    up.disabled = i >= layers.length - 1;
+    up.addEventListener('click', (ev) => { ev.stopPropagation(); moveLayer(l.id, +1); });
+
+    const down = document.createElement('button');
+    down.className = 'layer-mini'; down.textContent = '▼'; down.title = 'Bajar';
+    down.disabled = i <= 1;   // no se puede bajar por debajo de la base
+    down.addEventListener('click', (ev) => { ev.stopPropagation(); moveLayer(l.id, -1); });
+
+    const del = document.createElement('button');
+    del.className = 'layer-mini layer-del'; del.textContent = '🗑'; del.title = 'Eliminar';
+    del.disabled = isBase;
+    del.addEventListener('click', (ev) => { ev.stopPropagation(); deleteLayer(l.id); });
+
+    row.append(eye, name, up, down, del);
+    row.addEventListener('click', () => setActive(l.id));
+    layersEl.appendChild(row);
+  }
+}
+
+function addLayer() {
+  const id = nextId++;
+  layers.push({ id, name: `Capa ${id}`, canvas: blankCanvas(), visible: true });
+  setActive(id);
+  commit();
+}
+
+function deleteLayer(id: number) {
+  const i = layers.findIndex(l => l.id === id);
+  if (i <= 0) return;                       // la base no se borra
+  layers.splice(i, 1);
+  if (activeId === id) activeId = layers[layers.length - 1].id;
+  setActive(activeId);
+  commit();
+}
+
+function moveLayer(id: number, dir: number) {
+  const i = layers.findIndex(l => l.id === id);
+  const j = i + dir;
+  if (i <= 0 || j <= 0 || j >= layers.length) return;   // la base se queda abajo
+  [layers[i], layers[j]] = [layers[j], layers[i]];
+  renderLayers();
+  commit();
+}
+
+document.getElementById('layer-add')!.addEventListener('click', addLayer);
+
+// ── Skin base: presets, subir la tuya y resetear ─────────────────────────────
+// Fija la imagen base (limpia para resetear) y la pinta en la capa base.
+function setBaseSkin(src: CanvasImageSource) {
+  const bi = baseImage.getContext('2d')!;
+  bi.imageSmoothingEnabled = false;
+  bi.clearRect(0, 0, TEX, TEX);
+  bi.drawImage(src, 0, 0, TEX, TEX);
+  const bl = layers[0].canvas.getContext('2d')!;
+  bl.imageSmoothingEnabled = false;
+  bl.clearRect(0, 0, TEX, TEX);
+  bl.drawImage(baseImage, 0, 0);
+  commit();
+}
+
+function setSlim(v: boolean) {
+  if (slim === v) return;
+  slim = v;
+  document.querySelectorAll<HTMLButtonElement>('#model-toggle button').forEach(b =>
+    b.classList.toggle('active', (b.dataset.model === 'alex') === v));
+  rebuildModel();
+}
+
+// Resetea: quita las capas de usuario y restaura la base a la skin base actual.
+function resetAll() {
+  layers = [layers[0]];
+  const bl = layers[0].canvas.getContext('2d')!;
+  bl.clearRect(0, 0, TEX, TEX);
+  bl.drawImage(baseImage, 0, 0);
+  setActive(0);
+  commit();
+}
+
+function applyStevePreset() {
+  const img = new Image();
+  img.onload = () => { setBaseSkin(img); };
+  img.src = STEVE_SKIN;
+  setSlim(false);
+}
+function applyAlexPreset() {
+  setBaseSkin(createDefaultSkin(true, ALEX_PALETTE));
+  setSlim(true);
+}
+
+document.querySelectorAll<HTMLButtonElement>('#skin-presets button').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('#model-toggle button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#skin-presets button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    slim = btn.dataset.model === 'alex';
-    rebuildModel();
+    if (btn.dataset.skin === 'steve') applyStevePreset();
+    else applyAlexPreset();
   });
 });
+document.getElementById('skin-reset')!.addEventListener('click', resetAll);
 
-// outer layer
+// model toggle (ancho de brazos)
+document.querySelectorAll<HTMLButtonElement>('#model-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => setSlim(btn.dataset.model === 'alex'));
+});
+
+// outer layer (capa exterior del 3D)
 const outerChk = document.getElementById('layer-outer') as HTMLInputElement;
 outerChk.addEventListener('change', () => { outerVisible = outerChk.checked; model.setOuterVisible(outerVisible); });
 
 // 3D grid
 const grid3dChk = document.getElementById('grid3d') as HTMLInputElement;
 grid3dChk.addEventListener('change', () => { gridVisible = grid3dChk.checked; model.setGridVisible(gridVisible); });
-
-// paint in 3D — al pintar, el izquierdo pinta y el derecho orbita el modelo.
-const DEFAULT_BTN = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
-const PAINT_BTN = { LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
-const paint3dChk = document.getElementById('paint3d') as HTMLInputElement;
-paint3dChk.addEventListener('change', () => {
-  paint3d = paint3dChk.checked;
-  controls.enableRotate = true;            // siempre se puede orbitar (con el botón asignado)
-  controls.enablePan = !paint3d;
-  controls.mouseButtons = paint3d ? PAINT_BTN : DEFAULT_BTN;
-  renderer.domElement.style.cursor = paint3d ? 'crosshair' : '';
-});
-renderer.domElement.addEventListener('contextmenu', (e) => { if (paint3d) e.preventDefault(); });
-
-// capa a pintar en 3D (base / exterior)
-document.querySelectorAll<HTMLButtonElement>('#paint-layer button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#paint-layer button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    paintLayer = btn.dataset.layer as 'base' | 'outer';
-  });
-});
 
 // poses
 const poseSel = document.getElementById('pose') as HTMLSelectElement;
@@ -304,32 +405,30 @@ function updateSkinColors() {
   }
 }
 
-// import — carga un PNG como skin (lo dibuja a 64×64 en el canvas fuente).
+// ── Importar / exportar ───────────────────────────────────────────────────────
+// Importar una skin la pone como skin base (limpia las capas de usuario).
 function loadSkin(file: File) {
   const img = new Image();
   img.onload = () => {
-    const ctx = source.getContext('2d')!;
-    ctx.clearRect(0, 0, TEX, TEX);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, 0, 0, TEX, TEX);
-    texture.needsUpdate = true;
-    editor.render();
-    model.refreshOuter();
-    updateSkinColors();
+    layers = [layers[0]];
+    setActive(0);
+    setBaseSkin(img);
     URL.revokeObjectURL(img.src);
   };
   img.src = URL.createObjectURL(file);
 }
 const importInput = document.getElementById('import') as HTMLInputElement;
 document.getElementById('import-btn')!.addEventListener('click', () => importInput.click());
+document.getElementById('skin-upload')!.addEventListener('click', () => importInput.click());
 importInput.addEventListener('change', () => {
   const file = importInput.files?.[0];
   if (file) loadSkin(file);
   importInput.value = '';
 });
 
-// export
+// export — exporta el compuesto (todas las capas aplanadas).
 document.getElementById('export-btn')!.addEventListener('click', () => {
+  recomposite();
   const a = document.createElement('a');
   a.download = 'skin.png';
   a.href = source.toDataURL('image/png');
@@ -397,3 +496,9 @@ window.addEventListener('drop', (e) => {
   const file = Array.from(e.dataTransfer?.files ?? []).find(f => f.type.startsWith('image/'));
   if (file) loadSkin(file);
 });
+
+// ── Init: capa base con la skin Alex por defecto ─────────────────────────────
+layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true }];
+setActive(0);
+setBaseSkin(createDefaultSkin(true, ALEX_PALETTE));
+renderLayers();

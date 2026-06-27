@@ -40,14 +40,21 @@ export function buildParts(slim: boolean): PartSpec[] {
 }
 
 // ── Default skin ─────────────────────────────────────────────────────────────
-const SKIN = '#A97C50';
-const SKIN_SHADE = '#9A6F46';
-const HAIR = '#5A3A21';
-const SHIRT = '#3A7E7E';
-const PANTS = '#3A467E';
-const SHOE = '#2A2A30';
-const EYE_W = '#E8E8E8';
-const EYE_B = '#3A4A8A';
+export interface SkinPalette {
+  skin: string; skinShade: string; hair: string;
+  shirt: string; pants: string; shoe: string;
+  eyeW: string; eyeB: string;
+}
+export const STEVE_PALETTE: SkinPalette = {
+  skin: '#A97C50', skinShade: '#9A6F46', hair: '#5A3A21',
+  shirt: '#3A7E7E', pants: '#3A467E', shoe: '#2A2A30',
+  eyeW: '#E8E8E8', eyeB: '#3A4A8A',
+};
+export const ALEX_PALETTE: SkinPalette = {
+  skin: '#F4C59A', skinShade: '#E0A877', hair: '#C8753A',
+  shirt: '#5B9A55', pants: '#7A5230', shoe: '#5A5A5A',
+  eyeW: '#E8E8E8', eyeB: '#3A6A3A',
+};
 
 function fillFaces(ctx: CanvasRenderingContext2D, f: Faces, color: string) {
   ctx.fillStyle = color;
@@ -61,19 +68,19 @@ function px(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) 
   ctx.fillRect(x, y, 1, 1);
 }
 
-export function createDefaultSkin(): HTMLCanvasElement {
+export function createDefaultSkin(slim = false, pal: SkinPalette = STEVE_PALETTE): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = TEX;
   c.height = TEX;
   const ctx = c.getContext('2d')!;
   ctx.clearRect(0, 0, TEX, TEX);
 
-  const p = buildParts(false);
+  const p = buildParts(slim);
   const head = p[0].base, body = p[1].base, rArm = p[2].base, lArm = p[3].base, rLeg = p[4].base, lLeg = p[5].base;
 
   // Head: skin, hair on top + back + upper sides, eyes on front
-  fillFaces(ctx, head, SKIN);
-  ctx.fillStyle = HAIR;
+  fillFaces(ctx, head, pal.skin);
+  ctx.fillStyle = pal.hair;
   ctx.fillRect(head.top.x, head.top.y, head.top.w, head.top.h);
   ctx.fillRect(head.back.x, head.back.y, head.back.w, 3);
   ctx.fillRect(head.right.x, head.right.y, head.right.w, 2);
@@ -81,15 +88,15 @@ export function createDefaultSkin(): HTMLCanvasElement {
   ctx.fillRect(head.front.x, head.front.y, head.front.w, 2); // hair fringe
   // eyes (front face is 8×8 at head.front)
   const fx = head.front.x, fy = head.front.y;
-  px(ctx, fx + 1, fy + 4, EYE_W); px(ctx, fx + 2, fy + 4, EYE_B);
-  px(ctx, fx + 5, fy + 4, EYE_B); px(ctx, fx + 6, fy + 4, EYE_W);
+  px(ctx, fx + 1, fy + 4, pal.eyeW); px(ctx, fx + 2, fy + 4, pal.eyeB);
+  px(ctx, fx + 5, fy + 4, pal.eyeB); px(ctx, fx + 6, fy + 4, pal.eyeW);
 
   // Body: shirt
-  fillFaces(ctx, body, SHIRT);
+  fillFaces(ctx, body, pal.shirt);
   // Arms: skin, short sleeve (shirt) on top portion
-  fillFaces(ctx, rArm, SKIN);
-  fillFaces(ctx, lArm, SKIN);
-  ctx.fillStyle = SHIRT;
+  fillFaces(ctx, rArm, pal.skin);
+  fillFaces(ctx, lArm, pal.skin);
+  ctx.fillStyle = pal.shirt;
   for (const a of [rArm, lArm]) {
     ctx.fillRect(a.front.x, a.front.y, a.front.w, 4);
     ctx.fillRect(a.back.x, a.back.y, a.back.w, 4);
@@ -98,13 +105,13 @@ export function createDefaultSkin(): HTMLCanvasElement {
     ctx.fillRect(a.top.x, a.top.y, a.top.w, a.top.h);
   }
   // hands
-  ctx.fillStyle = SKIN_SHADE;
+  ctx.fillStyle = pal.skinShade;
   for (const a of [rArm, lArm]) ctx.fillRect(a.bottom.x, a.bottom.y, a.bottom.w, a.bottom.h);
 
   // Legs: pants, shoes at the bottom
-  fillFaces(ctx, rLeg, PANTS);
-  fillFaces(ctx, lLeg, PANTS);
-  ctx.fillStyle = SHOE;
+  fillFaces(ctx, rLeg, pal.pants);
+  fillFaces(ctx, lLeg, pal.pants);
+  ctx.fillStyle = pal.shoe;
   for (const l of [rLeg, lLeg]) {
     ctx.fillRect(l.bottom.x, l.bottom.y, l.bottom.w, l.bottom.h);
     ctx.fillRect(l.front.x, l.front.y + l.front.h - 2, l.front.w, 2);

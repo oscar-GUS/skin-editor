@@ -2,11 +2,14 @@ import { TEX } from './skin';
 
 export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'fill';
 
-// 2D pixel editor over the source skin canvas. Renders a zoomed view with a
-// grid onto a display canvas; edits write straight into the source canvas.
+// 2D pixel editor. Escribe sobre la CAPA ACTIVA (`target`) y muestra/lee el
+// resultado COMPUESTO (`source`, lo que se ve). El cuentagotas saca el color del
+// compuesto; lápiz/borrador/relleno actúan solo sobre la capa activa.
 export class SkinEditor {
-  readonly source: HTMLCanvasElement;       // 64×64 skin pixels (texture source)
+  readonly source: HTMLCanvasElement;       // compuesto (display + cuentagotas)
   private sctx: CanvasRenderingContext2D;
+  private target: HTMLCanvasElement;        // capa activa (destino de la pintura)
+  private tctx: CanvasRenderingContext2D;
   private display: HTMLCanvasElement;
   private dctx: CanvasRenderingContext2D;
   private scale = 8;
@@ -15,7 +18,7 @@ export class SkinEditor {
   color = '#A97C50';
   showGrid = true;
 
-  private undoStack: ImageData[] = [];
+  private undoStack: { canvas: HTMLCanvasElement; img: ImageData }[] = [];
   private undoLimit = 60;
 
   onChange: () => void = () => {};
@@ -25,6 +28,8 @@ export class SkinEditor {
   constructor(source: HTMLCanvasElement, display: HTMLCanvasElement) {
     this.source = source;
     this.sctx = source.getContext('2d')!;
+    this.target = source;                    // se sustituye con setTarget()
+    this.tctx = this.sctx;
     this.display = display;
     this.dctx = display.getContext('2d')!;
     display.width = TEX * this.scale;
@@ -51,42 +56,49 @@ export class SkinEditor {
     this.render();
   }
 
+  // Cambia la capa activa sobre la que se pinta.
+  setTarget(canvas: HTMLCanvasElement) {
+    this.target = canvas;
+    this.tctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  }
+
   pushUndo() {
-    this.undoStack.push(this.sctx.getImageData(0, 0, TEX, TEX));
+    this.undoStack.push({ canvas: this.target, img: this.tctx.getImageData(0, 0, TEX, TEX) });
     if (this.undoStack.length > this.undoLimit) this.undoStack.shift();
   }
 
   undo() {
     const snap = this.undoStack.pop();
     if (!snap) return;
-    this.sctx.putImageData(snap, 0, 0);
+    snap.canvas.getContext('2d')!.putImageData(snap.img, 0, 0);
     this.onChange();
     this.render();
   }
 
   paintPixel(x: number, y: number) {
     if (this.tool === 'eyedropper') {
-      const d = this.sctx.getImageData(x, y, 1, 1).data;
+      const d = this.sctx.getImageData(x, y, 1, 1).data;   // del compuesto
       if (d[3] === 0) return;
       this.onColorPick(rgbToHex(d[0], d[1], d[2]));
       return;
     }
     if (this.tool === 'eraser') {
-      this.sctx.clearRect(x, y, 1, 1);
+      this.tctx.clearRect(x, y, 1, 1);
     } else if (this.tool === 'fill') {
       this.floodFill(x, y);
       this.onUse(this.color);
     } else {
-      this.sctx.fillStyle = this.color;
-      this.sctx.fillRect(x, y, 1, 1);
+      this.tctx.fillStyle = this.color;
+      this.tctx.fillRect(x, y, 1, 1);
       this.onUse(this.color);
     }
     this.onChange();
     this.render();
   }
 
+  // Relleno sobre la capa activa (contigüidad según los píxeles de esa capa).
   private floodFill(x: number, y: number) {
-    const img = this.sctx.getImageData(0, 0, TEX, TEX);
+    const img = this.tctx.getImageData(0, 0, TEX, TEX);
     const data = img.data;
     const idx = (px: number, py: number) => (py * TEX + px) * 4;
     const start = idx(x, y);
@@ -103,7 +115,7 @@ export class SkinEditor {
       data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = 255;
       stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
     }
-    this.sctx.putImageData(img, 0, 0);
+    this.tctx.putImageData(img, 0, 0);
   }
 
   render() {
