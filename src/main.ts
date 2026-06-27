@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TEX, type Faces, type PartSpec } from './skin';
-import { buildSkinModel, type SkinModel, type PoseName } from './model';
+import { buildSkinModel, type SkinModel, type PoseName, type PartName } from './model';
 import { SkinEditor, type Tool } from './editor';
 import { STEVE_SKIN } from './steveSkin';
 
@@ -70,6 +70,7 @@ function rebuildModel() {
   model.setOuterVisible(outerVisible);
   model.setGridVisible(gridVisible);
   model.setPose(pose);
+  for (const name in partVisible) model.setPartVisible(name as PartName, partVisible[name]);
   scene.add(model.group);
 }
 
@@ -109,7 +110,7 @@ function paintFromEvent(e: PointerEvent) {
   // Siempre lanzamos contra la capa base (visible); la capa a escribir la decide
   // paintLayer, así se puede pintar el exterior aunque esté transparente.
   const hit = raycaster.intersectObjects(model.baseMeshes, false)
-    .find(h => h.uv && h.face);
+    .find(h => h.object.visible && h.uv && h.face);
   if (!hit || !hit.uv || !hit.face) return;
   const part = hit.object.userData.part as PartSpec;
   const faceKey = normalToFace(hit.face.normal);
@@ -139,6 +140,7 @@ window.addEventListener('pointerup', () => { painting3d = false; });
 let outerVisible = true;
 let gridVisible = false;
 let pose: PoseName = 'reposo';
+const partVisible: Record<string, boolean> = {};
 
 // undo (Ctrl/Cmd+Z)
 window.addEventListener('keydown', (e) => {
@@ -259,6 +261,18 @@ document.querySelectorAll<HTMLButtonElement>('#paint-layer button').forEach(btn 
 // poses
 const poseSel = document.getElementById('pose') as HTMLSelectElement;
 poseSel.addEventListener('change', () => { pose = poseSel.value as PoseName; model.setPose(pose); });
+
+// mostrar/ocultar partes del cuerpo (para pintar interiores, etc.)
+document.querySelectorAll<HTMLButtonElement>('#parts button').forEach(btn => {
+  const name = btn.dataset.part as PartName;
+  partVisible[name] = true;
+  btn.addEventListener('click', () => {
+    const v = !btn.classList.contains('active');
+    btn.classList.toggle('active', v);
+    partVisible[name] = v;
+    model.setPartVisible(name, v);
+  });
+});
 
 // ── Colores presentes en la skin ─────────────────────────────────────────────
 const skinColorsEl = document.getElementById('skin-colors')!;

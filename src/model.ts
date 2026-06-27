@@ -31,9 +31,9 @@ const POSES: Record<PoseName, Partial<Record<string, [number, number, number]>>>
   reposo:  {},
   andar:   { rightArm: [0.5, 0, 0],  leftArm: [-0.5, 0, 0], rightLeg: [-0.5, 0, 0], leftLeg: [0.5, 0, 0] },
   correr:  { rightArm: [1.1, 0, 0],  leftArm: [-1.1, 0, 0], rightLeg: [-1.0, 0, 0], leftLeg: [1.0, 0, 0] },
-  saludar: { leftArm: [0, 0, -2.6],  rightArm: [0.2, 0, 0] },
+  saludar: { leftArm: [0, 0, 2.6],   rightArm: [0.2, 0, 0] },
   sentado: { rightLeg: [-1.5, 0, 0], leftLeg: [-1.5, 0, 0], rightArm: [-0.25, 0, 0], leftArm: [-0.25, 0, 0] },
-  tpose:   { rightArm: [0, 0, 1.5708], leftArm: [0, 0, -1.5708] },
+  tpose:   { rightArm: [0, 0, -1.5708], leftArm: [0, 0, 1.5708] },
 };
 
 // Articulación (hombro/cadera) de cada miembro, en coords de modelo.
@@ -43,11 +43,15 @@ function jointFor(name: string, pos: [number, number, number]): [number, number,
   return null;
 }
 
+export const PART_NAMES = ['head', 'body', 'rightArm', 'leftArm', 'rightLeg', 'leftLeg'] as const;
+export type PartName = typeof PART_NAMES[number];
+
 export interface SkinModel {
   group: THREE.Group;
   baseMeshes: THREE.Mesh[];
   setOuterVisible(v: boolean): void;
   setGridVisible(v: boolean): void;
+  setPartVisible(name: PartName, v: boolean): void;
   setPose(name: PoseName): void;
   refreshOuter(): void;   // recalcula qué capas exteriores están vacías
   dispose(): void;
@@ -82,9 +86,9 @@ function getGridTexture(): THREE.Texture {
 export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HTMLCanvasElement): SkinModel {
   const group = new THREE.Group();
   const baseMeshes: THREE.Mesh[] = [];
-  const grid: THREE.Mesh[] = [];
-  const outerEntries: { mesh: THREE.Mesh; overlay: Faces }[] = [];
   const pivots: Record<string, THREE.Group> = {};
+  const reg: Record<string, { base: THREE.Mesh; outer: THREE.Mesh; grid: THREE.Mesh; overlay: Faces }> = {};
+  const partVisible: Record<string, boolean> = {};
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
   // Base: alpha-tested + doble cara, para que al borrar (alpha 0) deje el hueco
@@ -132,7 +136,6 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     const outerMesh = new THREE.Mesh(outerGeo, outerMat);
     outerMesh.position.set(...local);
     container.add(outerMesh);
-    outerEntries.push({ mesh: outerMesh, overlay: part.overlay });
     disposables.push(outerGeo);
 
     // grid overlay: same UVs as the base, slightly inflated to avoid z-fighting
@@ -143,11 +146,14 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     gridMesh.visible = false;
     gridMesh.renderOrder = 2;
     container.add(gridMesh);
-    grid.push(gridMesh);
     disposables.push(gridGeo);
+
+    reg[part.name] = { base: baseMesh, outer: outerMesh, grid: gridMesh, overlay: part.overlay };
+    partVisible[part.name] = true;
   }
 
   let outerVisible = true;
+  let gridVisible = false;
   const srcCtx = source.getContext('2d', { willReadFrequently: true })!;
 
   // ¿Tiene la capa exterior de esta parte algún pixel no transparente?
@@ -165,8 +171,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
 
   function refreshOuter() {
     const img = srcCtx.getImageData(0, 0, TEX, TEX);
-    for (const { mesh, overlay } of outerEntries) {
-      mesh.visible = outerVisible && overlayHasContent(img, overlay);
+    for (const name in reg) {
+      const { outer, overlay } = reg[name];
+      outer.visible = partVisible[name] && outerVisible && overlayHasContent(img, overlay);
     }
   }
 
@@ -174,7 +181,17 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     group,
     baseMeshes,
     setOuterVisible(v: boolean) { outerVisible = v; refreshOuter(); },
-    setGridVisible(v: boolean) { grid.forEach(m => (m.visible = v)); },
+    setGridVisible(v: boolean) {
+      gridVisible = v;
+      for (const name in reg) reg[name].grid.visible = partVisible[name] && v;
+    },
+    setPartVisible(name: PartName, v: boolean) {
+      if (!(name in reg)) return;
+      partVisible[name] = v;
+      reg[name].base.visible = v;
+      reg[name].grid.visible = v && gridVisible;
+      refreshOuter();
+    },
     setPose(name: PoseName) {
       const p = POSES[name] ?? {};
       for (const k in pivots) {

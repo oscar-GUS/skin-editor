@@ -191,6 +191,16 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .pose-field select:hover { border-color: #3a3a3e; }
 
+.parts { display: flex; align-items: center; gap: 5px; }
+.parts-label { font-size: 13px; color: var(--text-sec); margin-right: 2px; }
+.parts button {
+  padding: 4px 9px; font-size: 12px; font-weight: 500;
+  color: var(--text-dim); background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.parts button:hover { border-color: #3a3a3e; color: var(--text-sec); }
+.parts button.active { color: var(--text); border-color: var(--accent); background: #1e1810; }
+
 #viewer { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
 #viewer > canvas { display: block; position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; }
 
