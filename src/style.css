@@ -110,6 +110,24 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .recent.empty { cursor: default; opacity: 0.4; background:
   repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 8px 8px; }
 
+/* ── Panel de pincel ────────────────────────────── */
+.brush-panel { display: flex; flex-direction: column; gap: 8px; }
+.slider-row {
+  display: grid; grid-template-columns: 64px 1fr 48px; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-sec);
+}
+.slider-row input[type="range"] {
+  width: 100%; accent-color: var(--accent); height: 4px;
+}
+.slider-row span { font-size: 11px; color: var(--text-dim); text-align: right; }
+.blend-sel {
+  font-family: inherit; font-size: 12px; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 6px; cursor: pointer;
+}
+.blend-sel:hover { border-color: #3a3a3e; }
+.brush-toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.brush-toggles .seg button { padding: 3px 10px; }
+
 /* ── Capas (estilo Photoshop) ───────────────────── */
 .section-head { display: flex; align-items: center; justify-content: space-between; }
 .mini-btn {
@@ -140,6 +158,12 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .layer-mini:hover:not(:disabled) { border-color: #3a3a3e; color: var(--text); }
 .layer-mini:disabled { opacity: 0.3; cursor: default; }
 .layer-del:hover:not(:disabled) { border-color: #c0392b; color: #e0584a; }
+.layer-blend {
+  font-family: inherit; font-size: 11px; color: var(--text-sec); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 4px; padding: 3px 5px; cursor: pointer;
+  margin: 0 0 2px 30px; width: calc(100% - 30px);
+}
+.layer-blend:hover { border-color: #3a3a3e; }
 
 /* ── Skin base ──────────────────────────────────── */
 .skinbase-wrap { display: flex; flex-direction: column; gap: 7px; }

@@ -18,6 +18,14 @@ export class SkinEditor {
   color = '#A97C50';
   showGrid = true;
 
+  // Pincel
+  brushSize = 1;                                   // lado del cuadrado (px)
+  brushDensity = 1;                                // 0..1 cobertura (scatter)
+  brushOpacity = 1;                                // 0..1 alfa del trazo
+  brushBlend: GlobalCompositeOperation = 'source-over';
+  lockAlpha = false;                               // pintar solo sobre píxeles existentes
+  private strokePainted = new Set<number>();       // píxeles ya tocados en el trazo
+
   private undoStack: { canvas: HTMLCanvasElement; img: ImageData }[] = [];
   private undoLimit = 60;
 
@@ -63,6 +71,7 @@ export class SkinEditor {
   }
 
   pushUndo() {
+    this.strokePainted.clear();                    // empieza un trazo nuevo
     this.undoStack.push({ canvas: this.target, img: this.tctx.getImageData(0, 0, TEX, TEX) });
     if (this.undoStack.length > this.undoLimit) this.undoStack.shift();
   }
@@ -82,18 +91,45 @@ export class SkinEditor {
       this.onColorPick(rgbToHex(d[0], d[1], d[2]));
       return;
     }
-    if (this.tool === 'eraser') {
-      this.tctx.clearRect(x, y, 1, 1);
-    } else if (this.tool === 'fill') {
+    if (this.tool === 'fill') {
       this.floodFill(x, y);
       this.onUse(this.color);
     } else {
-      this.tctx.fillStyle = this.color;
-      this.tctx.fillRect(x, y, 1, 1);
-      this.onUse(this.color);
+      this.stamp(x, y);
+      if (this.tool !== 'eraser') this.onUse(this.color);
     }
     this.onChange();
     this.render();
+  }
+
+  // Sello del pincel sobre la capa activa: tamaño, densidad, opacidad, fusión y
+  // bloqueo de alfa. No repinta un pixel ya tocado en el mismo trazo.
+  private stamp(cx: number, cy: number) {
+    const size = this.brushSize;
+    const start = -Math.floor((size - 1) / 2);
+    const ctx = this.tctx;
+    ctx.save();
+    if (this.tool === 'eraser') {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#000';
+    } else {
+      ctx.globalCompositeOperation = this.lockAlpha ? 'source-atop' : this.brushBlend;
+      ctx.globalAlpha = this.brushOpacity;
+      ctx.fillStyle = this.color;
+    }
+    for (let dy = 0; dy < size; dy++) {
+      for (let dx = 0; dx < size; dx++) {
+        const x = cx + start + dx, y = cy + start + dy;
+        if (x < 0 || y < 0 || x >= TEX || y >= TEX) continue;
+        const k = y * TEX + x;
+        if (this.strokePainted.has(k)) continue;
+        if (this.brushDensity < 1 && Math.random() > this.brushDensity) continue;
+        this.strokePainted.add(k);
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+    ctx.restore();
   }
 
   // Relleno sobre la capa activa (contigüidad según los píxeles de esa capa).
@@ -104,7 +140,8 @@ export class SkinEditor {
     const start = idx(x, y);
     const target = [data[start], data[start + 1], data[start + 2], data[start + 3]];
     const fill = hexToRgb(this.color);
-    if (target[0] === fill[0] && target[1] === fill[1] && target[2] === fill[2] && target[3] === 255) return;
+    const a = Math.round(this.brushOpacity * 255);
+    if (target[0] === fill[0] && target[1] === fill[1] && target[2] === fill[2] && target[3] === a) return;
 
     const stack = [[x, y]];
     while (stack.length) {
@@ -112,7 +149,7 @@ export class SkinEditor {
       if (cx < 0 || cy < 0 || cx >= TEX || cy >= TEX) continue;
       const i = idx(cx, cy);
       if (data[i] !== target[0] || data[i + 1] !== target[1] || data[i + 2] !== target[2] || data[i + 3] !== target[3]) continue;
-      data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = 255;
+      data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = a;
       stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
     }
     this.tctx.putImageData(img, 0, 0);

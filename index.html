@@ -44,6 +44,33 @@
         <div class="skin-colors" id="skin-colors"></div>
       </div>
 
+      <div class="brush-panel">
+        <span class="recents-label">Pincel</span>
+        <label class="slider-row">Grosor
+          <input type="range" id="brush-size" min="1" max="8" step="1" value="1">
+          <span id="brush-size-val">1 px</span>
+        </label>
+        <label class="slider-row">Densidad
+          <input type="range" id="brush-density" min="10" max="100" step="5" value="100">
+          <span id="brush-density-val">100%</span>
+        </label>
+        <label class="slider-row">Opacidad
+          <input type="range" id="brush-opacity" min="5" max="100" step="5" value="100">
+          <span id="brush-opacity-val">100%</span>
+        </label>
+        <label class="slider-row">Fusión
+          <select id="brush-blend" class="blend-sel"></select>
+        </label>
+        <div class="brush-toggles">
+          <label class="check"><input type="checkbox" id="lock-alpha"> Bloquear alfa</label>
+          <label class="check"><input type="checkbox" id="symmetry"> Simetría</label>
+          <div class="seg" id="sym-axis" title="Eje de simetría">
+            <button data-axis="x" class="active">X</button>
+            <button data-axis="z">Z</button>
+          </div>
+        </div>
+      </div>
+
       <div class="canvas-wrap">
         <canvas id="editor"></canvas>
       </div>

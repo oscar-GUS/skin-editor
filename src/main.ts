@@ -25,12 +25,42 @@ function blankCanvas(): HTMLCanvasElement {
 const editorCanvas = document.getElementById('editor') as HTMLCanvasElement;
 const editor = new SkinEditor(source, editorCanvas);
 
+// Modos de fusión (etiqueta visible -> operación de canvas), para pincel y capa.
+const BLEND_MODES: { label: string; op: GlobalCompositeOperation }[] = [
+  { label: 'Por defecto', op: 'source-over' },
+  { label: 'Detrás',      op: 'destination-over' },
+  { label: 'Multiplicar', op: 'multiply' },
+  { label: 'Añadir',      op: 'lighter' },
+  { label: 'Iluminar',    op: 'lighten' },
+  { label: 'Oscurecer',   op: 'darken' },
+  { label: 'Pantalla',    op: 'screen' },
+  { label: 'Cubierta',    op: 'overlay' },
+  { label: 'Diferencia',  op: 'difference' },
+  { label: 'Color',       op: 'color' },
+];
+function fillBlendSelect(sel: HTMLSelectElement, value: GlobalCompositeOperation) {
+  sel.replaceChildren();
+  for (const m of BLEND_MODES) {
+    const o = document.createElement('option');
+    o.value = m.op; o.textContent = m.label;
+    if (m.op === value) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
 // Recompone el compuesto (source) a partir de las capas visibles, de abajo arriba.
 function recomposite() {
   const ctx = source.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
+  ctx.globalCompositeOperation = 'source-over';
   ctx.clearRect(0, 0, TEX, TEX);
-  for (const l of layers) if (l.visible) ctx.drawImage(l.canvas, 0, 0);
+  for (let i = 0; i < layers.length; i++) {
+    const l = layers[i];
+    if (!l.visible) continue;
+    ctx.globalCompositeOperation = i === 0 ? 'source-over' : l.blend;  // la base siempre normal
+    ctx.drawImage(l.canvas, 0, 0);
+  }
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 // Tras cualquier cambio en capas/pintura: recompone, sube a 3D y refresca UI.
@@ -103,18 +133,35 @@ let painting3d = false;
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
+let symmetry = false;
+let symAxis: 'x' | 'z' = 'x';
+const mirrorRc = new THREE.Raycaster();
+
+function pixelFromRaycaster(rc: THREE.Raycaster): { x: number; y: number } | null {
+  const hit = rc.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv);
+  if (!hit || !hit.uv) return null;
+  const x = Math.floor(hit.uv.x * TEX);
+  const y = Math.floor((1 - hit.uv.y) * TEX);
+  if (x < 0 || y < 0 || x >= TEX || y >= TEX) return null;
+  return { x, y };
+}
+
 function paintFromEvent(e: PointerEvent) {
   const rect = renderer.domElement.getBoundingClientRect();
   ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObjects(model.baseMeshes, false)
-    .find(h => h.object.visible && h.uv);
-  if (!hit || !hit.uv) return;
-  const x = Math.floor(hit.uv.x * TEX);
-  const y = Math.floor((1 - hit.uv.y) * TEX);
-  if (x < 0 || y < 0 || x >= TEX || y >= TEX) return;
-  editor.paintPixel(x, y);
+  const p = pixelFromRaycaster(raycaster);
+  if (p) editor.paintPixel(p.x, p.y);
+  // Simetría: refleja el rayo respecto al plano del eje elegido y pinta el otro lado.
+  if (symmetry && (editor.tool === 'pencil' || editor.tool === 'eraser')) {
+    const mo = raycaster.ray.origin.clone(), md = raycaster.ray.direction.clone();
+    if (symAxis === 'x') { mo.x = -mo.x; md.x = -md.x; }
+    else { mo.z = -mo.z; md.z = -md.z; }
+    mirrorRc.set(mo, md.normalize());
+    const pm = pixelFromRaycaster(mirrorRc);
+    if (pm) editor.paintPixel(pm.x, pm.y);
+  }
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -209,8 +256,47 @@ for (const hex of PALETTE) {
 const gridChk = document.getElementById('grid') as HTMLInputElement;
 gridChk.addEventListener('change', () => { editor.showGrid = gridChk.checked; editor.render(); });
 
+// ── Pincel: grosor, densidad, opacidad, fusión, bloquear alfa, simetría ──────
+const brushSizeInput = document.getElementById('brush-size') as HTMLInputElement;
+const brushSizeVal = document.getElementById('brush-size-val')!;
+brushSizeInput.addEventListener('input', () => {
+  editor.brushSize = +brushSizeInput.value;
+  brushSizeVal.textContent = brushSizeInput.value + ' px';
+});
+
+const brushDensityInput = document.getElementById('brush-density') as HTMLInputElement;
+const brushDensityVal = document.getElementById('brush-density-val')!;
+brushDensityInput.addEventListener('input', () => {
+  editor.brushDensity = +brushDensityInput.value / 100;
+  brushDensityVal.textContent = brushDensityInput.value + '%';
+});
+
+const brushOpacityInput = document.getElementById('brush-opacity') as HTMLInputElement;
+const brushOpacityVal = document.getElementById('brush-opacity-val')!;
+brushOpacityInput.addEventListener('input', () => {
+  editor.brushOpacity = +brushOpacityInput.value / 100;
+  brushOpacityVal.textContent = brushOpacityInput.value + '%';
+});
+
+const brushBlendSel = document.getElementById('brush-blend') as HTMLSelectElement;
+fillBlendSelect(brushBlendSel, 'source-over');
+brushBlendSel.addEventListener('change', () => { editor.brushBlend = brushBlendSel.value as GlobalCompositeOperation; });
+
+const lockAlphaChk = document.getElementById('lock-alpha') as HTMLInputElement;
+lockAlphaChk.addEventListener('change', () => { editor.lockAlpha = lockAlphaChk.checked; });
+
+const symChk = document.getElementById('symmetry') as HTMLInputElement;
+symChk.addEventListener('change', () => { symmetry = symChk.checked; });
+document.querySelectorAll<HTMLButtonElement>('#sym-axis button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#sym-axis button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    symAxis = btn.dataset.axis as 'x' | 'z';
+  });
+});
+
 // ── Capas (estilo Photoshop) ─────────────────────────────────────────────────
-interface Layer { id: number; name: string; canvas: HTMLCanvasElement; visible: boolean; }
+interface Layer { id: number; name: string; canvas: HTMLCanvasElement; visible: boolean; blend: GlobalCompositeOperation; }
 let layers: Layer[] = [];     // índice 0 = base (abajo); el último = arriba del todo
 let activeId = 0;
 let nextId = 1;
@@ -263,12 +349,23 @@ function renderLayers() {
     row.append(eye, name, up, down, del);
     row.addEventListener('click', () => setActive(l.id));
     layersEl.appendChild(row);
+
+    // Fila de modo de fusión de la capa (la base siempre va normal).
+    if (!isBase) {
+      const blendSel = document.createElement('select');
+      blendSel.className = 'layer-blend';
+      fillBlendSelect(blendSel, l.blend);
+      blendSel.title = 'Modo de fusión de la capa';
+      blendSel.addEventListener('click', (ev) => ev.stopPropagation());
+      blendSel.addEventListener('change', () => { l.blend = blendSel.value as GlobalCompositeOperation; commit(); });
+      layersEl.appendChild(blendSel);
+    }
   }
 }
 
 function addLayer() {
   const id = nextId++;
-  layers.push({ id, name: `Capa ${id}`, canvas: blankCanvas(), visible: true });
+  layers.push({ id, name: `Capa ${id}`, canvas: blankCanvas(), visible: true, blend: 'source-over' });
   setActive(id);
   commit();
 }
@@ -511,7 +608,7 @@ window.addEventListener('drop', (e) => {
 });
 
 // ── Init: capa base con la skin Steve por defecto ────────────────────────────
-layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true }];
+layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true, blend: 'source-over' }];
 setActive(0);
 applyStevePreset();
 renderLayers();
