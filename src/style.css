@@ -154,15 +154,32 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .brush-toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .brush-toggles .seg button { padding: 3px 10px; }
 
-/* ── Panel de degradado ─────────────────────────── */
+/* ── Panel de degradado multi-stop ──────────────── */
 .grad-panel { display: flex; flex-direction: column; gap: 8px; }
 .grad-panel[hidden] { display: none; }
-.grad-row { display: flex; gap: 14px; }
-.grad-row label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-sec); }
-.grad-row input[type="color"] {
-  width: 36px; height: 30px; padding: 0; cursor: pointer;
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: none;
+.grad-bar-wrap { padding: 4px 6px 16px; }
+.grad-bar {
+  position: relative; height: 22px; border-radius: 4px;
+  border: 1px solid var(--border); cursor: copy;
+  background: repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 10px 10px;
 }
+.grad-mark {
+  position: absolute; top: calc(100% + 2px); transform: translateX(-50%);
+  width: 12px; height: 12px; border-radius: 3px;
+  border: 2px solid #fff; box-shadow: 0 0 0 1px #000; cursor: grab;
+}
+.grad-mark.sel { border-color: var(--accent); width: 14px; height: 14px; }
+.grad-stop-edit { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-sec); }
+.grad-stop-edit input[type="color"] {
+  width: 30px; height: 26px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px; background: none;
+}
+.grad-pos-input {
+  width: 44px; padding: 3px 5px; font-size: 12px; font-family: inherit;
+  color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.grad-hint { font-size: 10px; color: var(--text-dim); line-height: 1.4; }
 
 /* ── Capas (estilo Photoshop) ───────────────────── */
 .section-head { display: flex; align-items: center; justify-content: space-between; }

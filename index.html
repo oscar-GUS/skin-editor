@@ -140,13 +140,18 @@
         </div>
       </div>
 
-      <!-- Degradado: colores A y B (visible solo con la herramienta degradado) -->
+      <!-- Degradado multi-stop (visible solo con la herramienta degradado) -->
       <div class="grad-panel" id="grad-panel" hidden>
         <span class="recents-label">Degradado</span>
-        <div class="grad-row">
-          <label>A <input type="color" id="grad-a" value="#A97C50"></label>
-          <label>B <input type="color" id="grad-b" value="#3A467E"></label>
+        <div class="grad-bar-wrap">
+          <div class="grad-bar" id="grad-bar"></div>
         </div>
+        <div class="grad-stop-edit">
+          <input type="color" id="grad-stop-color" title="Color del punto">
+          <label>Pos <input type="number" id="grad-stop-pos" min="0" max="100" step="1" class="grad-pos-input">%</label>
+          <button id="grad-stop-del" class="mini-btn">Quitar</button>
+        </div>
+        <p class="grad-hint">Clic en la barra = nuevo color · arrastra los puntos para moverlos · luego arrastra A→B sobre la textura 2D para aplicarlo.</p>
       </div>
 
       <div class="color-row">

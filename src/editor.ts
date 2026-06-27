@@ -26,9 +26,11 @@ export class SkinEditor {
   lockAlpha = false;                               // pintar solo sobre píxeles existentes
   private strokePainted = new Set<number>();       // píxeles ya tocados en el trazo
 
-  // Degradado
-  gradColorA = '#A97C50';
-  gradColorB = '#3A467E';
+  // Degradado multi-stop (colores con posición 0..1, estilo Photoshop)
+  gradStops: { color: string; pos: number }[] = [
+    { color: '#A97C50', pos: 0 },
+    { color: '#3A467E', pos: 1 },
+  ];
 
   // Selección (zona de trabajo) + portapapeles
   selection: { x: number; y: number; w: number; h: number } | null = null;
@@ -208,14 +210,15 @@ export class SkinEditor {
     return !s || (x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h);
   }
 
-  // Degradado lineal de A→B (color A a color B) sobre la capa activa (o la selección).
+  // Degradado lineal multi-stop A→B sobre la capa activa (o la selección).
   private applyGradient(a: { x: number; y: number }, b: { x: number; y: number }) {
+    const stops = [...this.gradStops].sort((s1, s2) => s1.pos - s2.pos);
+    if (stops.length === 0) return;
     this.pushUndo();
     const ctx = this.tctx;
     const r = this.selection ?? { x: 0, y: 0, w: TEX, h: TEX };
     const g = ctx.createLinearGradient(a.x + 0.5, a.y + 0.5, b.x + 0.5, b.y + 0.5);
-    g.addColorStop(0, this.gradColorA);
-    g.addColorStop(1, this.gradColorB);
+    for (const st of stops) g.addColorStop(Math.max(0, Math.min(1, st.pos)), st.color);
     ctx.save();
     ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
     ctx.globalCompositeOperation = this.lockAlpha ? 'source-atop' : 'source-over';
@@ -223,7 +226,7 @@ export class SkinEditor {
     ctx.fillStyle = g;
     ctx.fillRect(r.x, r.y, r.w, r.h);
     ctx.restore();
-    this.onUse(this.gradColorA); this.onUse(this.gradColorB);
+    for (const st of stops) this.onUse(st.color);
     this.onChange(); this.render();
   }
 
@@ -235,6 +238,15 @@ export class SkinEditor {
   }
 
   clearSelection() { this.selection = null; this.render(); }
+
+  // Fija la selección a un rectángulo concreto (p. ej. desde el 3D al clicar una parte).
+  setSelectionRect(x: number, y: number, w: number, h: number) {
+    this.selection = {
+      x: Math.round(x), y: Math.round(y),
+      w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)),
+    };
+    this.render();
+  }
 
   // Copia los píxeles de la selección (de la capa activa) al portapapeles.
   copySelection() {
@@ -299,7 +311,9 @@ export class SkinEditor {
         ctx.moveTo((a.x + 0.5) * s, (a.y + 0.5) * s);
         ctx.lineTo((b.x + 0.5) * s, (b.y + 0.5) * s);
         ctx.stroke();
-        for (const [p, col] of [[a, this.gradColorA], [b, this.gradColorB]] as const) {
+        const sorted = [...this.gradStops].sort((s1, s2) => s1.pos - s2.pos);
+        const cA = sorted[0]?.color ?? '#fff', cB = sorted[sorted.length - 1]?.color ?? '#fff';
+        for (const [p, col] of [[a, cA], [b, cB]] as const) {
           ctx.fillStyle = col; ctx.strokeStyle = '#fff';
           ctx.beginPath(); ctx.arc((p.x + 0.5) * s, (p.y + 0.5) * s, 4, 0, Math.PI * 2);
           ctx.fill(); ctx.stroke();

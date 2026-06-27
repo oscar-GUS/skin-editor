@@ -1,7 +1,7 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TEX } from './skin';
+import { TEX, type PartSpec, type Rect } from './skin';
 import { buildSkinModel, type SkinModel, type PoseName, type PartName } from './model';
 import { SkinEditor, type Tool } from './editor';
 import { STEVE_SKIN } from './steveSkin';
@@ -164,8 +164,30 @@ function paintFromEvent(e: PointerEvent) {
   }
 }
 
+// Seleccionar en 3D: clic en una parte selecciona su zona de textura (la marca en
+// el lienzo 2D y limita lo que pintas, tanto en 2D como en 3D).
+function selectFromEvent(e: PointerEvent) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible);
+  if (!hit) return;
+  const part = hit.object.userData.part as PartSpec | undefined;
+  if (!part) return;
+  // Bounding box de todas las caras base de la parte en el atlas.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const f of Object.values(part.base) as Rect[]) {
+    minX = Math.min(minX, f.x); minY = Math.min(minY, f.y);
+    maxX = Math.max(maxX, f.x + f.w); maxY = Math.max(maxY, f.y + f.h);
+  }
+  editor.setSelectionRect(minX, minY, maxX - minX, maxY - minY);
+}
+
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;               // izquierdo pinta; derecho orbita
+  if (editor.tool === 'select') { selectFromEvent(e); return; }
+  if (editor.tool === 'gradient') return;   // el degradado se aplica en la textura 2D
   if (editor.tool !== 'eyedropper') editor.pushUndo();
   painting3d = editor.tool !== 'eyedropper' && editor.tool !== 'fill';
   paintFromEvent(e);
@@ -190,13 +212,66 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'escape') { editor.clearSelection(); }
 });
 
-// colores A/B del degradado
-const gradA = document.getElementById('grad-a') as HTMLInputElement;
-const gradB = document.getElementById('grad-b') as HTMLInputElement;
-editor.gradColorA = gradA.value;
-editor.gradColorB = gradB.value;
-gradA.addEventListener('input', () => { editor.gradColorA = gradA.value; });
-gradB.addEventListener('input', () => { editor.gradColorB = gradB.value; });
+// ── Editor de degradado multi-stop (colores con posición, estilo Photoshop) ──
+{
+  const bar     = document.getElementById('grad-bar')!;
+  const colorIn = document.getElementById('grad-stop-color') as HTMLInputElement;
+  const posIn   = document.getElementById('grad-stop-pos') as HTMLInputElement;
+  const delBtn  = document.getElementById('grad-stop-del') as HTMLButtonElement;
+  let sel = 0;
+  const stops = () => editor.gradStops;
+
+  function renderGrad() {
+    const ss = [...stops()].sort((a, b) => a.pos - b.pos);
+    bar.style.background = `linear-gradient(to right, ${ss.map(s => `${s.color} ${Math.round(s.pos * 100)}%`).join(', ')})`;
+    bar.querySelectorAll('.grad-mark').forEach(m => m.remove());
+    stops().forEach((s, i) => {
+      const m = document.createElement('div');
+      m.className = 'grad-mark' + (i === sel ? ' sel' : '');
+      m.style.left = (s.pos * 100) + '%';
+      m.style.background = s.color;
+      m.dataset.idx = String(i);
+      bar.appendChild(m);
+    });
+    const cur = stops()[sel];
+    if (cur) { colorIn.value = cur.color; posIn.value = String(Math.round(cur.pos * 100)); }
+    delBtn.disabled = stops().length <= 2;
+  }
+  const select = (i: number) => { sel = Math.max(0, Math.min(stops().length - 1, i)); renderGrad(); };
+  const posFromEvent = (e: PointerEvent) => {
+    const r = bar.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  };
+
+  let dragIdx = -1;
+  bar.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement;
+    if (t.classList.contains('grad-mark')) {
+      dragIdx = +t.dataset.idx!;
+      select(dragIdx);
+    } else {
+      stops().push({ color: colorIn.value || '#ffffff', pos: posFromEvent(e) });
+      select(stops().length - 1);
+    }
+    bar.setPointerCapture(e.pointerId);
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (dragIdx < 0) return;
+    stops()[dragIdx].pos = posFromEvent(e);
+    renderGrad();
+  });
+  bar.addEventListener('pointerup', () => { dragIdx = -1; });
+
+  colorIn.addEventListener('input', () => { if (stops()[sel]) { stops()[sel].color = colorIn.value; renderGrad(); } });
+  posIn.addEventListener('input', () => { if (stops()[sel]) { stops()[sel].pos = Math.max(0, Math.min(100, +posIn.value)) / 100; renderGrad(); } });
+  delBtn.addEventListener('click', () => {
+    if (stops().length <= 2) return;
+    stops().splice(sel, 1);
+    select(Math.min(sel, stops().length - 1));
+  });
+
+  renderGrad();
+}
 
 // tools
 const gradPanel = document.getElementById('grad-panel')!;
