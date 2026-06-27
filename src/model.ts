@@ -101,10 +101,13 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     map: texture, roughness: 1, metalness: 0,
     transparent: true, alphaTest: 0.01, side: THREE.DoubleSide, depthWrite: false,
   });
+  // Material para caras de la capa exterior SIN contenido: no dibuja nada (evita el
+  // borde sucio del silueteado cuando la capa externa está vacía en esa cara).
+  const hiddenMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
   const gridMat = new THREE.MeshBasicMaterial({
     map: getGridTexture(), transparent: true, depthWrite: false,
   });
-  disposables.push(baseMat, outerMat, gridMat);
+  disposables.push(baseMat, outerMat, hiddenMat, gridMat);
 
   for (const part of buildParts(slim)) {
     const [w, h, d] = part.size;
@@ -133,7 +136,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
 
     const outerGeo = new THREE.BoxGeometry(w + 1, h + 1, d + 1);
     applyUV(outerGeo, part.overlay);
-    const outerMesh = new THREE.Mesh(outerGeo, outerMat);
+    // Material por cara (6 grupos del box, en orden FACE_ORDER) para poder ocultar
+    // individualmente las caras de la capa exterior que no tengan contenido.
+    const outerMesh = new THREE.Mesh(outerGeo, FACE_ORDER.map(() => outerMat));
     outerMesh.position.set(...local);
     container.add(outerMesh);
     disposables.push(outerGeo);
@@ -156,24 +161,30 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   let gridVisible = false;
   const srcCtx = source.getContext('2d', { willReadFrequently: true })!;
 
-  // ¿Tiene la capa exterior de esta parte algún pixel no transparente?
-  function overlayHasContent(img: ImageData, overlay: Faces): boolean {
-    for (const k of FACE_ORDER) {
-      const r = overlay[k];
-      for (let yy = r.y; yy < r.y + r.h; yy++) {
-        for (let xx = r.x; xx < r.x + r.w; xx++) {
-          if (img.data[(yy * TEX + xx) * 4 + 3] !== 0) return true;
-        }
+  // ¿Tiene algún pixel no transparente este rectángulo del atlas?
+  function rectHasContent(img: ImageData, r: { x: number; y: number; w: number; h: number }): boolean {
+    for (let yy = r.y; yy < r.y + r.h; yy++) {
+      for (let xx = r.x; xx < r.x + r.w; xx++) {
+        if (img.data[(yy * TEX + xx) * 4 + 3] !== 0) return true;
       }
     }
     return false;
   }
 
+  // Asigna a cada cara de la capa exterior el material visible o el invisible según
+  // tenga o no contenido, y oculta la malla entera si ninguna cara tiene nada.
   function refreshOuter() {
     const img = srcCtx.getImageData(0, 0, TEX, TEX);
     for (const name in reg) {
       const { outer, overlay } = reg[name];
-      outer.visible = partVisible[name] && outerVisible && overlayHasContent(img, overlay);
+      const mats = outer.material as THREE.Material[];
+      let alguna = false;
+      FACE_ORDER.forEach((k, i) => {
+        const has = rectHasContent(img, overlay[k]);
+        mats[i] = has ? outerMat : hiddenMat;
+        if (has) alguna = true;
+      });
+      outer.visible = partVisible[name] && outerVisible && alguna;
     }
   }
 
