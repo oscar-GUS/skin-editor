@@ -19,7 +19,8 @@ export class SkinEditor {
   showGrid = true;
 
   // Pincel
-  brushSize = 1;                                   // lado del cuadrado (px)
+  brushSize = 1;                                   // lado del cuadrado/diámetro (px)
+  brushShape: 'square' | 'circle' = 'square';      // forma de la punta
   feather = 0;                                     // 0..1 difuminado (caída de alfa hacia los bordes)
   brushOpacity = 1;                                // 0..1 alfa del trazo
   brushBlend: GlobalCompositeOperation = 'source-over';
@@ -165,12 +166,11 @@ export class SkinEditor {
         if (!this.inSel(x, y)) continue;           // limitar a la zona seleccionada
         const k = y * TEX + x;
         if (this.strokePainted.has(k)) continue;
+        const dist = size > 1 ? Math.hypot(dx - mid, dy - mid) / radio : 0;   // 0 centro → 1 borde
+        if (this.brushShape === 'circle' && dist > 1) continue;               // fuera del círculo
         // Difuminado: el alfa cae hacia los bordes del pincel.
         let a = erase ? 1 : this.brushOpacity;
-        if (this.feather > 0 && size > 1) {
-          const dist = Math.hypot(dx - mid, dy - mid) / radio;          // 0 centro → 1 borde
-          a *= Math.max(0, 1 - this.feather * Math.min(1, dist));
-        }
+        if (this.feather > 0 && size > 1) a *= Math.max(0, 1 - this.feather * Math.min(1, dist));
         if (a <= 0) continue;
         this.strokePainted.add(k);
         ctx.globalAlpha = a;
@@ -327,15 +327,25 @@ export class SkinEditor {
       ctx.restore();
     }
 
-    // ── Previsualización del grosor del pincel (cursor) ──────────────────────
+    // ── Previsualización del pincel: grosor + forma + dureza (footprint real) ─
     if (this.hover && (this.tool === 'pencil' || this.tool === 'eraser')) {
       const size = this.brushSize;
       const start = -Math.floor((size - 1) / 2);
-      const x = (this.hover.x + start), y = (this.hover.y + start);
+      const mid = (size - 1) / 2, radio = mid + 0.0001;
+      const col = this.tool === 'eraser' ? '255,255,255' : '244,129,31';
       ctx.save();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = this.tool === 'eraser' ? 'rgba(255,255,255,0.9)' : 'rgba(244,129,31,0.95)';
-      ctx.strokeRect(x * s + 0.5, y * s + 0.5, size * s - 1, size * s - 1);
+      for (let dy = 0; dy < size; dy++) {
+        for (let dx = 0; dx < size; dx++) {
+          const dist = size > 1 ? Math.hypot(dx - mid, dy - mid) / radio : 0;
+          if (this.brushShape === 'circle' && dist > 1) continue;
+          let a = 1;
+          if (this.feather > 0 && size > 1) a = Math.max(0.12, 1 - this.feather * Math.min(1, dist));
+          const x = this.hover.x + start + dx, y = this.hover.y + start + dy;
+          if (x < 0 || y < 0 || x >= TEX || y >= TEX) continue;
+          ctx.fillStyle = `rgba(${col},${0.4 * a})`;
+          ctx.fillRect(x * s, y * s, s, s);
+        }
+      }
       ctx.restore();
     }
   }

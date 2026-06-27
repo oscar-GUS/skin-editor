@@ -86,9 +86,9 @@
             <rect data-part="rightLeg" class="hud-part active" x="21" y="48" width="8"  height="30" rx="2"/>
             <rect data-part="leftLeg"  class="hud-part active" x="31" y="48" width="8"  height="30" rx="2"/>
           </svg>
-          <div class="seg hud-layer" id="layer-toggle" title="Capa visible">
-            <button data-layer="inner">Interna</button>
-            <button data-layer="outer" class="active">Externa</button>
+          <div class="seg hud-layer" id="layer-toggle" title="Capa de trabajo">
+            <button data-layer="inner" class="active">Interna</button>
+            <button data-layer="outer">Externa</button>
           </div>
         </div>
 
@@ -119,6 +119,13 @@
           <input type="range" id="brush-size" min="1" max="8" step="1" value="1">
           <span id="brush-size-val">1 px</span>
         </label>
+        <div class="tb-group">
+          <span class="tb-label">Forma</span>
+          <div class="seg" id="brush-shape">
+            <button data-shape="square" class="active">Cuadrado</button>
+            <button data-shape="circle">Círculo</button>
+          </div>
+        </div>
         <label class="slider-row">Difuminado
           <input type="range" id="brush-density" min="0" max="100" step="5" value="0">
           <span id="brush-density-val">0%</span>

@@ -1,7 +1,7 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TEX, type PartSpec, type Rect } from './skin';
+import { TEX, type PartSpec, type Rect, type Faces } from './skin';
 import { buildSkinModel, type SkinModel, type PoseName, type PartName } from './model';
 import { SkinEditor, type Tool } from './editor';
 import { STEVE_SKIN } from './steveSkin';
@@ -110,7 +110,10 @@ function rebuildModel() {
   model.setOuterVisible(outerVisible);
   model.setGridVisible(gridVisible);
   model.setPose(pose);
-  for (const name in partVisible) model.setPartVisible(name as PartName, partVisible[name]);
+  for (const name in partVis) {
+    model.setPartLayerVisible(name as PartName, 'base', partVis[name].base);
+    model.setPartLayerVisible(name as PartName, 'outer', partVis[name].outer);
+  }
   scene.add(model.group);
 }
 
@@ -137,11 +140,27 @@ let symmetry = false;
 let symAxis: 'x' | 'z' = 'x';
 const mirrorRc = new THREE.Raycaster();
 
+function normalToFace(n: THREE.Vector3): keyof Faces {
+  const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+  if (ax >= ay && ax >= az) return n.x > 0 ? 'left' : 'right';
+  if (ay >= ax && ay >= az) return n.y > 0 ? 'top' : 'bottom';
+  return n.z > 0 ? 'front' : 'back';
+}
+
 function pixelFromRaycaster(rc: THREE.Raycaster): { x: number; y: number } | null {
-  const hit = rc.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv);
-  if (!hit || !hit.uv) return null;
-  const x = Math.floor(hit.uv.x * TEX);
-  const y = Math.floor((1 - hit.uv.y) * TEX);
+  const hit = rc.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
+  if (!hit || !hit.uv || !hit.face) return null;
+  const fx = hit.uv.x * TEX, fy = (1 - hit.uv.y) * TEX;
+  let x = Math.floor(fx), y = Math.floor(fy);
+  // En modo externa, remapeamos el píxel base al rectángulo de la capa externa.
+  if (paintLayer === 'outer') {
+    const part = hit.object.userData.part as PartSpec | undefined;
+    if (!part) return null;
+    const faceKey = normalToFace(hit.face.normal);
+    const base = part.base[faceKey], ov = part.overlay[faceKey];
+    x = ov.x + Math.min(base.w - 1, Math.max(0, Math.floor(fx - base.x)));
+    y = ov.y + Math.min(base.h - 1, Math.max(0, Math.floor(fy - base.y)));
+  }
   if (x < 0 || y < 0 || x >= TEX || y >= TEX) return null;
   return { x, y };
 }
@@ -197,10 +216,15 @@ window.addEventListener('pointerup', () => { painting3d = false; });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ── UI wiring ────────────────────────────────────────────────────────────────
-let outerVisible = true;
+// Capa de trabajo: 'inner' (base) pinta el cuerpo y oculta la externa para verla;
+// 'outer' pinta la capa externa y deja la interna visible debajo.
+let paintLayer: 'inner' | 'outer' = 'inner';
+let outerVisible = false;          // arranca en interna → externa oculta
 let gridVisible = false;
 let pose: PoseName = 'reposo';
-const partVisible: Record<string, boolean> = {};
+// Visibilidad por parte y por capa, independiente.
+const partVis: Record<string, { base: boolean; outer: boolean }> = {};
+for (const n of ['head', 'body', 'rightArm', 'leftArm', 'rightLeg', 'leftLeg']) partVis[n] = { base: true, outer: true };
 
 // atajos: deshacer, copiar/pegar selección, quitar selección
 window.addEventListener('keydown', (e) => {
@@ -349,6 +373,15 @@ const brushSizeVal = document.getElementById('brush-size-val')!;
 brushSizeInput.addEventListener('input', () => {
   editor.brushSize = +brushSizeInput.value;
   brushSizeVal.textContent = brushSizeInput.value + ' px';
+});
+
+// forma del pincel (cuadrado / círculo)
+document.querySelectorAll<HTMLButtonElement>('#brush-shape button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#brush-shape button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    editor.brushShape = btn.dataset.shape as 'square' | 'circle';
+  });
 });
 
 const brushDensityInput = document.getElementById('brush-density') as HTMLInputElement;
@@ -535,10 +568,22 @@ document.querySelectorAll<HTMLButtonElement>('#layer-toggle button').forEach(btn
   btn.addEventListener('click', () => {
     document.querySelectorAll('#layer-toggle button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    outerVisible = btn.dataset.layer === 'outer';
+    paintLayer = btn.dataset.layer === 'outer' ? 'outer' : 'inner';
+    // Interna oculta la externa (para verla/pintarla); externa la muestra y deja la interna debajo.
+    outerVisible = paintLayer === 'outer';
     model.setOuterVisible(outerVisible);
+    syncPartHud();
   });
 });
+
+// Refleja en la silueta del HUD la visibilidad de la capa activa para cada parte.
+function syncPartHud() {
+  document.querySelectorAll<SVGElement>('#parts-hud [data-part]').forEach(el => {
+    const name = el.dataset.part as PartName;
+    const v = paintLayer === 'outer' ? partVis[name].outer : partVis[name].base;
+    el.classList.toggle('active', v);
+  });
+}
 
 // 3D grid
 const grid3dChk = document.getElementById('grid3d') as HTMLInputElement;
@@ -551,12 +596,12 @@ poseSel.addEventListener('change', () => { pose = poseSel.value as PoseName; mod
 // mostrar/ocultar partes del cuerpo — HUD con silueta de skin (abajo-izquierda)
 document.querySelectorAll<SVGElement>('#parts-hud [data-part]').forEach(el => {
   const name = el.dataset.part as PartName;
-  partVisible[name] = true;
   el.addEventListener('click', () => {
-    const v = !el.classList.contains('active');
+    const layer: 'base' | 'outer' = paintLayer === 'outer' ? 'outer' : 'base';
+    const v = !(layer === 'base' ? partVis[name].base : partVis[name].outer);
+    if (layer === 'base') partVis[name].base = v; else partVis[name].outer = v;
     el.classList.toggle('active', v);
-    partVisible[name] = v;
-    model.setPartVisible(name, v);
+    model.setPartLayerVisible(name, layer, v);
   });
 });
 
@@ -705,3 +750,4 @@ layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true, blen
 setActive(0);
 applyStevePreset();
 renderLayers();
+model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta

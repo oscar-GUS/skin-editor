@@ -51,7 +51,7 @@ export interface SkinModel {
   baseMeshes: THREE.Mesh[];
   setOuterVisible(v: boolean): void;
   setGridVisible(v: boolean): void;
-  setPartVisible(name: PartName, v: boolean): void;
+  setPartLayerVisible(name: PartName, layer: 'base' | 'outer', v: boolean): void;
   setPose(name: PoseName): void;
   refreshOuter(): void;   // recalcula qué capas exteriores están vacías
   dispose(): void;
@@ -88,7 +88,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const baseMeshes: THREE.Mesh[] = [];
   const pivots: Record<string, THREE.Group> = {};
   const reg: Record<string, { base: THREE.Mesh; outer: THREE.Mesh; grid: THREE.Mesh; overlay: Faces }> = {};
-  const partVisible: Record<string, boolean> = {};
+  // Visibilidad independiente por parte y por capa (interna=base / externa=outer).
+  const partBaseVisible:  Record<string, boolean> = {};
+  const partOuterVisible: Record<string, boolean> = {};
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
   // Base: alpha-tested + doble cara, para que al borrar (alpha 0) deje el hueco
@@ -154,10 +156,11 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     disposables.push(gridGeo);
 
     reg[part.name] = { base: baseMesh, outer: outerMesh, grid: gridMesh, overlay: part.overlay };
-    partVisible[part.name] = true;
+    partBaseVisible[part.name] = true;
+    partOuterVisible[part.name] = true;
   }
 
-  let outerVisible = true;
+  let outerVisible = true;   // global: la capa externa se oculta al trabajar en interna
   let gridVisible = false;
   const srcCtx = source.getContext('2d', { willReadFrequently: true })!;
 
@@ -184,7 +187,7 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
         mats[i] = has ? outerMat : hiddenMat;
         if (has) alguna = true;
       });
-      outer.visible = partVisible[name] && outerVisible && alguna;
+      outer.visible = partOuterVisible[name] && outerVisible && alguna;
     }
   }
 
@@ -194,14 +197,19 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     setOuterVisible(v: boolean) { outerVisible = v; refreshOuter(); },
     setGridVisible(v: boolean) {
       gridVisible = v;
-      for (const name in reg) reg[name].grid.visible = partVisible[name] && v;
+      for (const name in reg) reg[name].grid.visible = partBaseVisible[name] && v;
     },
-    setPartVisible(name: PartName, v: boolean) {
+    // Muestra/oculta una parte SOLO en la capa indicada (interna=base / externa=outer).
+    setPartLayerVisible(name: PartName, layer: 'base' | 'outer', v: boolean) {
       if (!(name in reg)) return;
-      partVisible[name] = v;
-      reg[name].base.visible = v;
-      reg[name].grid.visible = v && gridVisible;
-      refreshOuter();
+      if (layer === 'base') {
+        partBaseVisible[name] = v;
+        reg[name].base.visible = v;
+        reg[name].grid.visible = v && gridVisible;
+      } else {
+        partOuterVisible[name] = v;
+        refreshOuter();
+      }
     },
     setPose(name: PoseName) {
       const p = POSES[name] ?? {};
