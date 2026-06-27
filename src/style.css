@@ -162,11 +162,13 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 /* ── Panel de imagen de referencia ──────────────── */
 #ref-panel {
   position: absolute; right: 12px; bottom: 12px; z-index: 5;
-  width: min(340px, 60%);
+  width: 320px; height: 280px;
+  min-width: 180px; min-height: 150px; max-width: 92%; max-height: 92%;
   background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius); overflow: hidden;
+  border-radius: var(--radius);
   box-shadow: 0 8px 24px rgba(0,0,0,0.45);
   display: flex; flex-direction: column;
+  resize: both; overflow: hidden;   /* esquina inf-der para redimensionar */
 }
 /* El id gana al [hidden] del navegador; hay que ocultarlo explícitamente. */
 #ref-panel[hidden] { display: none; }
@@ -174,10 +176,11 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
   display: flex; align-items: center; justify-content: space-between;
   padding: 6px 8px 6px 10px; font-size: 11px; color: var(--text-sec);
   border-bottom: 1px solid var(--border); user-select: none;
+  cursor: move; flex-shrink: 0;
 }
-#ref-close { padding: 2px 7px; font-size: 12px; line-height: 1; border-radius: 4px; }
+#ref-close { padding: 2px 7px; font-size: 12px; line-height: 1; border-radius: 4px; cursor: pointer; }
 #ref-canvas {
-  display: block; width: 100%; height: auto; max-height: 360px;
+  display: block; flex: 1; min-height: 0; width: 100%; height: 100%;
   object-fit: contain; image-rendering: pixelated; cursor: crosshair;
   background: repeating-conic-gradient(#1b1b1e 0% 25%, #212125 0% 50%) 0 0 / 12px 12px;
 }
@@ -208,9 +211,9 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 /* ── Viewer pane ──────────────────────────────── */
 .viewer-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .viewer-toolbar {
-  padding: 12px 18px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  display: flex; align-items: center; column-gap: 16px; row-gap: 9px; flex-wrap: wrap;
   flex-shrink: 0;
 }
 
@@ -232,15 +235,18 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .pose-field select:hover { border-color: #3a3a3e; }
 
-.parts { display: flex; align-items: center; gap: 5px; }
-.parts-label { font-size: 13px; color: var(--text-sec); margin-right: 2px; }
+.tb-group { display: flex; align-items: center; gap: 6px; }
+.tb-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; }
+.parts { flex-wrap: wrap; }
 .parts button {
-  padding: 4px 9px; font-size: 12px; font-weight: 500;
+  padding: 3px 8px; font-size: 11px; font-weight: 500;
   color: var(--text-dim); background: var(--panel);
   border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .parts button:hover { border-color: #3a3a3e; color: var(--text-sec); }
 .parts button.active { color: var(--text); border-color: var(--accent); background: #1e1810; }
+
+.full-btn { width: 100%; padding: 9px; }
 
 #viewer { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
 #viewer > canvas { display: block; position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; }

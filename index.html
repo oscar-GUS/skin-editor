@@ -16,8 +16,6 @@
     <div class="header-actions">
       <input type="file" id="import" accept="image/png" hidden>
       <input type="file" id="import-image" accept="image/*" hidden>
-      <button id="import-img-btn">Importar imagen</button>
-      <button id="import-btn">Importar Skin</button>
       <button id="export-btn" class="primary">Exportar Skin</button>
     </div>
   </header>
@@ -63,24 +61,28 @@
       <div class="skinbase-wrap">
         <span class="recents-label">Skin base</span>
         <div class="skinbase-row" id="skin-presets">
-          <button data-skin="steve">Steve</button>
-          <button data-skin="alex" class="active">Alex</button>
-        </div>
-        <div class="skinbase-actions">
+          <button data-skin="steve" class="active">Steve</button>
           <button id="skin-upload">Subir la tuya</button>
-          <button id="skin-reset">Resetear a la base</button>
         </div>
+        <button id="skin-reset">Resetear a la base</button>
       </div>
+
+      <button id="import-img-btn" class="full-btn">Importar imagen de referencia</button>
     </aside>
 
     <main class="viewer-pane">
       <div class="viewer-toolbar">
-        <div class="seg" id="model-toggle" title="Ancho de brazos">
-          <button data-model="steve">Steve</button>
-          <button data-model="alex" class="active">Alex</button>
+        <div class="tb-group">
+          <span class="tb-label">Brazos</span>
+          <div class="seg" id="model-toggle" title="Ancho de brazos">
+            <button data-model="steve" class="active">Normal</button>
+            <button data-model="alex">Finos</button>
+          </div>
         </div>
-        <label class="check"><input type="checkbox" id="layer-outer" checked> Capa exterior</label>
-        <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
+        <div class="tb-group">
+          <label class="check"><input type="checkbox" id="layer-outer" checked> Capa ext.</label>
+          <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula</label>
+        </div>
         <label class="check pose-field">Pose
           <select id="pose">
             <option value="reposo">Reposo</option>
@@ -91,8 +93,8 @@
             <option value="tpose">T-pose</option>
           </select>
         </label>
-        <div class="parts" id="parts" title="Mostrar/ocultar partes">
-          <span class="parts-label">Partes</span>
+        <div class="parts tb-group" id="parts" title="Mostrar/ocultar partes">
+          <span class="tb-label">Partes</span>
           <button data-part="head" class="active">Cabeza</button>
           <button data-part="body" class="active">Torso</button>
           <button data-part="leftArm" class="active">Brazo I</button>

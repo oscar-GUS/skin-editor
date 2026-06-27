@@ -1,7 +1,7 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { TEX, createDefaultSkin, ALEX_PALETTE } from './skin';
+import { TEX } from './skin';
 import { buildSkinModel, type SkinModel, type PoseName, type PartName } from './model';
 import { SkinEditor, type Tool } from './editor';
 import { STEVE_SKIN } from './steveSkin';
@@ -69,7 +69,7 @@ controls.enablePan = false;
 controls.mouseButtons = { LEFT: -1 as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 renderer.domElement.style.cursor = 'crosshair';
 
-let slim = true;
+let slim = false;
 let model: SkinModel = buildSkinModel(texture, slim, source);
 scene.add(model.group);
 
@@ -331,17 +331,12 @@ function applyStevePreset() {
   img.src = STEVE_SKIN;
   setSlim(false);
 }
-function applyAlexPreset() {
-  setBaseSkin(createDefaultSkin(true, ALEX_PALETTE));
-  setSlim(true);
-}
 
-document.querySelectorAll<HTMLButtonElement>('#skin-presets button').forEach(btn => {
+document.querySelectorAll<HTMLButtonElement>('#skin-presets button[data-skin]').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('#skin-presets button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#skin-presets button[data-skin]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     if (btn.dataset.skin === 'steve') applyStevePreset();
-    else applyAlexPreset();
   });
 });
 document.getElementById('skin-reset')!.addEventListener('click', resetAll);
@@ -418,7 +413,6 @@ function loadSkin(file: File) {
   img.src = URL.createObjectURL(file);
 }
 const importInput = document.getElementById('import') as HTMLInputElement;
-document.getElementById('import-btn')!.addEventListener('click', () => importInput.click());
 document.getElementById('skin-upload')!.addEventListener('click', () => importInput.click());
 importInput.addEventListener('change', () => {
   const file = importInput.files?.[0];
@@ -462,6 +456,25 @@ importImageInput.addEventListener('change', () => {
 });
 document.getElementById('ref-close')!.addEventListener('click', () => { refPanel.hidden = true; });
 
+// Arrastrar el panel de referencia por su cabecera.
+const refHead = refPanel.querySelector('.ref-head') as HTMLElement;
+let refDrag: { x: number; y: number; left: number; top: number } | null = null;
+refHead.addEventListener('pointerdown', (e) => {
+  if ((e.target as HTMLElement).closest('#ref-close')) return;
+  refDrag = { x: e.clientX, y: e.clientY, left: refPanel.offsetLeft, top: refPanel.offsetTop };
+  refPanel.style.right = 'auto';
+  refPanel.style.bottom = 'auto';
+  refPanel.style.left = refDrag.left + 'px';
+  refPanel.style.top = refDrag.top + 'px';
+  refHead.setPointerCapture(e.pointerId);
+});
+refHead.addEventListener('pointermove', (e) => {
+  if (!refDrag) return;
+  refPanel.style.left = (refDrag.left + e.clientX - refDrag.x) + 'px';
+  refPanel.style.top = (refDrag.top + e.clientY - refDrag.y) + 'px';
+});
+refHead.addEventListener('pointerup', () => { refDrag = null; });
+
 // Clic en la imagen de referencia = cuentagotas (siempre toma el color).
 refCanvas.addEventListener('pointerdown', (e) => {
   const rect = refCanvas.getBoundingClientRect();
@@ -497,8 +510,8 @@ window.addEventListener('drop', (e) => {
   if (file) loadSkin(file);
 });
 
-// ── Init: capa base con la skin Alex por defecto ─────────────────────────────
+// ── Init: capa base con la skin Steve por defecto ────────────────────────────
 layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true }];
 setActive(0);
-setBaseSkin(createDefaultSkin(true, ALEX_PALETTE));
+applyStevePreset();
 renderLayers();
