@@ -21,6 +21,8 @@ export class SkinEditor {
   selectMode: SelectMode = 'rect';
   color = '#A97C50';
   showGrid = true;
+  // Guías de bloque (contorno de cada cara) para diferenciar bloques en la textura 2D.
+  blockGuides: { x: number; y: number; w: number; h: number; layer: 'base' | 'overlay' }[] = [];
 
   // Pincel
   brushSize = 1;                                   // lado del cuadrado/diámetro (px)
@@ -32,6 +34,11 @@ export class SkinEditor {
   private strokePainted = new Set<number>();       // píxeles ya tocados en el trazo
   private lineFrom: { x: number; y: number } | null = null;   // ancla para línea recta (shift)
   private fillTolerance = 32;                       // tolerancia del relleno (suma de canales)
+  // Buffer de trazo para el difuminado: cobertura máxima por píxel a lo largo del
+  // trazo sostenido, recompuesta desde un snapshot → trazo suave y CONSTANTE.
+  private strokeCov: Float32Array | null = null;
+  private strokeBase: ImageData | null = null;     // capa activa al empezar el trazo
+  private strokeUnder: ImageData | null = null;    // compuesto al empezar el trazo
 
   // Degradado multi-stop (color + posición 0..1 + opacidad, estilo Photoshop)
   gradStops: GradStop[] = [
@@ -127,8 +134,18 @@ export class SkinEditor {
 
   pushUndo() {
     this.strokePainted.clear();                    // empieza un trazo nuevo
-    this.undoStack.push({ canvas: this.target, img: this.tctx.getImageData(0, 0, TEX, TEX) });
+    const snap = this.tctx.getImageData(0, 0, TEX, TEX);
+    this.undoStack.push({ canvas: this.target, img: snap });
     if (this.undoStack.length > this.undoLimit) this.undoStack.shift();
+    // ¿Trazo con difuminado en modo normal? → activa el buffer de cobertura.
+    if (this.tool === 'pencil' && this.feather > 0 && this.brushSize > 1 &&
+        this.brushBlend === 'source-over' && !this.lockAlpha) {
+      this.strokeCov = new Float32Array(TEX * TEX);
+      this.strokeBase = snap;
+      this.strokeUnder = this.sctx.getImageData(0, 0, TEX, TEX);
+    } else {
+      this.strokeCov = null; this.strokeBase = null; this.strokeUnder = null;
+    }
   }
 
   undo() {
@@ -189,6 +206,8 @@ export class SkinEditor {
   private stamp(cx: number, cy: number) {
     const size = this.brushSize;
     const start = -Math.floor((size - 1) / 2);
+    // Trazo con difuminado: acumula cobertura máxima y recompón desde el snapshot.
+    if (this.strokeCov) { this.stampStroke(cx, cy); this.lineFrom = { x: cx, y: cy }; return; }
     const erase = this.tool === 'eraser';
     const ctx = this.tctx;
     // ¿Se puede difuminar mezclando con el compuesto? (modo normal, sin borrar)
@@ -242,6 +261,52 @@ export class SkinEditor {
     }
     ctx.restore();
     this.lineFrom = { x: cx, y: cy };              // ancla para la siguiente línea recta
+  }
+
+  // Sello difuminado: acumula la cobertura máxima del pincel (no repinta más flojo)
+  // y recompone la capa entera desde el snapshot → trazo suave y uniforme.
+  private stampStroke(cx: number, cy: number) {
+    const size = this.brushSize;
+    const start = -Math.floor((size - 1) / 2);
+    const cov = this.strokeCov!;
+    for (let dy = 0; dy < size; dy++) {
+      for (let dx = 0; dx < size; dx++) {
+        const x = cx + start + dx, y = cy + start + dy;
+        if (x < 0 || y < 0 || x >= TEX || y >= TEX) continue;
+        if (!this.inSel(x, y)) continue;
+        const fa = this.brushAlpha(dx, dy);
+        if (fa === null) continue;
+        const a = this.brushOpacity * fa;
+        const k = y * TEX + x;
+        if (a > cov[k]) cov[k] = a;                // cobertura máxima
+      }
+    }
+    this.renderStroke();
+  }
+
+  // Recompone la capa activa = snapshot + color del pincel mezclado por cobertura.
+  private renderStroke() {
+    const cov = this.strokeCov!, base = this.strokeBase!, under = this.strokeUnder!;
+    const out = this.tctx.createImageData(TEX, TEX);
+    out.data.set(base.data);
+    const [cr, cg, cb] = hexToRgb(this.color);
+    const bd = base.data, ud = under.data, od = out.data;
+    for (let k = 0; k < TEX * TEX; k++) {
+      const c = cov[k];
+      if (c <= 0) continue;
+      const i = k * 4;
+      // color de fondo a mezclar: lo visible debajo (compuesto) si lo hay, si no la propia capa
+      const hasUnder = ud[i + 3] > 0;
+      const ur = hasUnder ? ud[i]     : bd[i];
+      const ug = hasUnder ? ud[i + 1] : bd[i + 1];
+      const ub = hasUnder ? ud[i + 2] : bd[i + 2];
+      od[i]     = Math.round(cr * c + ur * (1 - c));
+      od[i + 1] = Math.round(cg * c + ug * (1 - c));
+      od[i + 2] = Math.round(cb * c + ub * (1 - c));
+      // opaco si hay piel debajo (se ve igual en 3D); si no, semitransparente por cobertura
+      od[i + 3] = hasUnder ? 255 : Math.max(bd[i + 3], Math.round(c * 255));
+    }
+    this.tctx.putImageData(out, 0, 0);
   }
 
   // Línea recta (Bresenham) sellando el pincel a lo largo del recorrido.
@@ -536,6 +601,13 @@ export class SkinEditor {
         ctx.moveTo(0, i * s + 0.5); ctx.lineTo(this.display.width, i * s + 0.5);
       }
       ctx.stroke();
+    }
+
+    // Guías de bloque: contorno de cada cara (interna en azulado, externa en naranja).
+    for (const g of this.blockGuides) {
+      ctx.strokeStyle = g.layer === 'overlay' ? 'rgba(244,129,31,0.5)' : 'rgba(90,180,210,0.45)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(g.x * s + 0.5, g.y * s + 0.5, g.w * s - 1, g.h * s - 1);
     }
 
     if (this.hasSelection()) this.strokeSelection(ctx, s);

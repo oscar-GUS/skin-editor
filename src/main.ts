@@ -74,10 +74,9 @@ function commit() {
 
 editor.onChange = () => { commit(); };
 
-// Tras cambiar la selección: redibuja la máscara naranja para el 3D.
+// Tras cambiar la selección: recalcula el contorno de líneas en el 3D.
 function syncSelection() {
-  editor.fillSelectionMask(selCtx);
-  model.refreshSelection();
+  model.setSelectionOutline((x, y) => editor.isSelected(x, y));
 }
 editor.onSelectionChange = syncSelection;
 
@@ -108,19 +107,14 @@ controls.screenSpacePanning = true;
 controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
 renderer.domElement.style.cursor = 'crosshair';
 
-// Canvas de selección (64×64) que el modelo usa como textura naranja en 3D.
-const selCanvas = document.createElement('canvas');
-selCanvas.width = selCanvas.height = TEX;
-const selCtx = selCanvas.getContext('2d')!;
-
 let slim = false;
-let model: SkinModel = buildSkinModel(texture, slim, source, selCanvas);
+let model: SkinModel = buildSkinModel(texture, slim, source);
 scene.add(model.group);
 
 function rebuildModel() {
   scene.remove(model.group);
   model.dispose();
-  model = buildSkinModel(texture, slim, source, selCanvas);
+  model = buildSkinModel(texture, slim, source);
   model.setBaseVisible(baseVisible);
   model.setOuterVisible(outerVisible);
   model.setGridVisible(gridVisible);
@@ -131,6 +125,18 @@ function rebuildModel() {
   }
   scene.add(model.group);
   syncSelection();
+  updateBlockGuides();
+}
+
+// Contorno de cada cara (interna/externa) para diferenciar bloques en la textura 2D.
+function updateBlockGuides() {
+  const guides: { x: number; y: number; w: number; h: number; layer: 'base' | 'overlay' }[] = [];
+  for (const part of buildParts(slim)) {
+    for (const f of Object.values(part.base) as Rect[]) guides.push({ ...f, layer: 'base' });
+    for (const f of Object.values(part.overlay) as Rect[]) guides.push({ ...f, layer: 'overlay' });
+  }
+  editor.blockGuides = guides;
+  editor.render();
 }
 
 function resize() {
@@ -165,6 +171,18 @@ brushCursor.visible = false;
 scene.add(brushCursor);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const tmpNormal = new THREE.Vector3();
+
+// Línea de previsualización del degradado A→B en el modelo 3D.
+const gradLineGeo = new THREE.BufferGeometry();
+gradLineGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
+const gradLine = new THREE.Line(gradLineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false }));
+gradLine.renderOrder = 11; gradLine.visible = false; gradLine.frustumCulled = false;
+scene.add(gradLine);
+const gradPtA = new THREE.Vector3();
+function setGradLine(a: THREE.Vector3, b: THREE.Vector3) {
+  const p = gradLineGeo.attributes.position as THREE.BufferAttribute;
+  p.setXYZ(0, a.x, a.y, a.z); p.setXYZ(1, b.x, b.y, b.z); p.needsUpdate = true;
+}
 
 let symmetry = false;
 let symAxis: 'x' | 'z' = 'x';
@@ -308,8 +326,13 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   }
   if (tool === 'gradient') {
     castFromEvent(e);
+    const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
     const p = pixelFromRaycaster(raycaster);
-    if (p) { grad3dA = p; grad3dB = p; e.stopImmediatePropagation(); }   // arranca el arrastre del degradado
+    if (hit && p) {
+      grad3dA = p; grad3dB = p;
+      gradPtA.copy(hit.point); setGradLine(gradPtA, gradPtA); gradLine.visible = true;
+      e.stopImmediatePropagation();
+    }
     return;                                 // clic en vacío → OrbitControls desplaza
   }
   if (!hitsSkin(e)) return;                 // vacío → desplazar (pan)
@@ -320,7 +343,13 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 }, true);
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (painting3d) paintFromEvent(e);
-  if (grad3dA) { castFromEvent(e); const p = pixelFromRaycaster(raycaster); if (p) grad3dB = p; }
+  if (grad3dA) {
+    castFromEvent(e);
+    const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
+    const p = pixelFromRaycaster(raycaster);
+    if (p) grad3dB = p;
+    if (hit) setGradLine(gradPtA, hit.point);   // previsualiza la línea A→B
+  }
   updateBrushCursor(e);
 });
 renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; });
@@ -328,6 +357,7 @@ window.addEventListener('pointerup', () => {
   painting3d = false;
   if (grad3dA && grad3dB) editor.applyGradientBetween(grad3dA, grad3dB);   // aplica el degradado A→B
   grad3dA = grad3dB = null;
+  gradLine.visible = false;
 });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -1005,6 +1035,8 @@ layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true, blen
 setActive(0);
 applyStevePreset();
 renderLayers();
+updateBlockGuides();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+
 
 

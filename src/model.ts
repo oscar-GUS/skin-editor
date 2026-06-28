@@ -55,8 +55,8 @@ export interface SkinModel {
   setPartLayerVisible(name: PartName, layer: 'base' | 'outer', v: boolean): void;
   setPose(name: PoseName): void;
   refreshOuter(): void;          // recalcula qué capas exteriores están vacías
-  refreshSelection(): void;      // la textura de selección cambió
-  setSelectionVisible(v: boolean): void;  // parpadeo de la selección (marching ants 3D)
+  setSelectionOutline(isSelected: (x: number, y: number) => boolean): void;  // recalcula el contorno de selección
+  setSelectionVisible(v: boolean): void;  // muestra/oculta el contorno de selección
   dispose(): void;
 }
 
@@ -86,13 +86,14 @@ function getGridTexture(): THREE.Texture {
   return tex;
 }
 
-export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HTMLCanvasElement, selCanvas: HTMLCanvasElement): SkinModel {
+export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HTMLCanvasElement): SkinModel {
   const group = new THREE.Group();
   const baseMeshes: THREE.Mesh[] = [];
   const pivots: Record<string, THREE.Group> = {};
   const reg: Record<string, {
     base: THREE.Mesh; outer: THREE.Mesh; grid: THREE.Mesh; gridOuter: THREE.Mesh;
-    selBase: THREE.Mesh; selOuter: THREE.Mesh; overlay: Faces;
+    selLines: THREE.LineSegments; baseGeo: THREE.BoxGeometry; outerGeo: THREE.BoxGeometry;
+    part: PartSpec; overlay: Faces;
   }> = {};
   // Visibilidad independiente por parte y por capa (interna=base / externa=outer).
   const partBaseVisible:  Record<string, boolean> = {};
@@ -116,13 +117,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const gridMat = new THREE.MeshBasicMaterial({
     map: getGridTexture(), transparent: true, depthWrite: false,
   });
-  // Selección: textura naranja (selCanvas) sobre los texeles seleccionados.
-  const selTex = new THREE.CanvasTexture(selCanvas);
-  selTex.magFilter = THREE.NearestFilter; selTex.minFilter = THREE.NearestFilter;
-  selTex.colorSpace = THREE.SRGBColorSpace;
-  const selMat = new THREE.MeshBasicMaterial({
-    map: selTex, transparent: true, alphaTest: 0.01, depthWrite: false, depthTest: false,
-  });
+  // Selección: contorno con LÍNEAS finas (no relleno), del grosor de un trazo,
+  // visible a través del modelo para apreciarse en todas las caras.
+  const selMat = new THREE.LineBasicMaterial({ color: 0xF4811F, transparent: true, depthTest: false });
   disposables.push(baseMat, outerMat, hiddenMat, gridMat, selMat);
 
   for (const part of buildParts(slim)) {
@@ -174,24 +171,17 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     container.add(gridOuterMesh);
     disposables.push(gridOuterGeo);
 
-    // Selección (interna + externa), un pelín más infladas para quedar por encima.
-    const selBaseGeo = new THREE.BoxGeometry(w + 0.12, h + 0.12, d + 0.12);
-    applyUV(selBaseGeo, part.base);
-    const selBaseMesh = new THREE.Mesh(selBaseGeo, selMat);
-    selBaseMesh.position.set(...local); selBaseMesh.visible = false; selBaseMesh.renderOrder = 4;
-    container.add(selBaseMesh);
-    disposables.push(selBaseGeo);
-
-    const selOuterGeo = new THREE.BoxGeometry(w + 1.14, h + 1.14, d + 1.14);
-    applyUV(selOuterGeo, part.overlay);
-    const selOuterMesh = new THREE.Mesh(selOuterGeo, selMat);
-    selOuterMesh.position.set(...local); selOuterMesh.visible = false; selOuterMesh.renderOrder = 4;
-    container.add(selOuterMesh);
-    disposables.push(selOuterGeo);
+    // Selección: contorno de líneas (se rellena en setSelectionOutline).
+    const selGeo = new THREE.BufferGeometry();
+    const selLines = new THREE.LineSegments(selGeo, selMat);
+    selLines.position.set(...local); selLines.visible = false; selLines.renderOrder = 5;
+    selLines.frustumCulled = false;
+    container.add(selLines);
+    disposables.push(selGeo);
 
     reg[part.name] = {
       base: baseMesh, outer: outerMesh, grid: gridMesh, gridOuter: gridOuterMesh,
-      selBase: selBaseMesh, selOuter: selOuterMesh, overlay: part.overlay,
+      selLines, baseGeo, outerGeo, part: part as PartSpec, overlay: part.overlay,
     };
     partBaseVisible[part.name] = true;
     partOuterVisible[part.name] = true;
@@ -233,10 +223,47 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   }
 
   function refreshSelVisibility() {
+    for (const name in reg) reg[name].selLines.visible = selVisible;
+  }
+
+  // Genera las aristas del contorno de selección sobre las caras (texeles del borde),
+  // como líneas finas. Cada cara se enmarca por su perímetro → bloque = caja fina.
+  const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpN = new THREE.Vector3();
+  const p0 = new THREE.Vector3(), pX = new THREE.Vector3(), pY = new THREE.Vector3();
+  function buildOutline(isSelected: (x: number, y: number) => boolean) {
     for (const name in reg) {
-      const r = reg[name];
-      r.selBase.visible = selVisible && baseVisible && partBaseVisible[name];
-      r.selOuter.visible = selVisible && outerVisible && partOuterVisible[name];
+      const { selLines, baseGeo, outerGeo, part } = reg[name];
+      const verts: number[] = [];
+      const addFaces = (geo: THREE.BoxGeometry, faces: Faces) => {
+        const pos = geo.attributes.position as THREE.BufferAttribute;
+        FACE_ORDER.forEach((fk, fi) => {
+          const R = faces[fk];
+          p0.fromBufferAttribute(pos, fi * 4 + 0);                 // esquina atlas (R.x, R.y)
+          pX.fromBufferAttribute(pos, fi * 4 + 1).sub(p0);         // dirección ancho
+          pY.fromBufferAttribute(pos, fi * 4 + 2).sub(p0);         // dirección alto
+          tmpN.copy(pX).cross(pY).normalize().multiplyScalar(0.04); // separa de la superficie
+          const at = (ci: number, cj: number, out: THREE.Vector3) =>
+            out.copy(p0).addScaledVector(pX, ci / R.w).addScaledVector(pY, cj / R.h).add(tmpN);
+          const sel = (i: number, j: number) =>
+            i >= 0 && j >= 0 && i < R.w && j < R.h && isSelected(R.x + i, R.y + j);
+          const seg = (cax: number, cay: number, cbx: number, cby: number) => {
+            at(cax, cay, tmpA); at(cbx, cby, tmpB);
+            verts.push(tmpA.x, tmpA.y, tmpA.z, tmpB.x, tmpB.y, tmpB.z);
+          };
+          for (let j = 0; j < R.h; j++) for (let i = 0; i < R.w; i++) {
+            if (!sel(i, j)) continue;
+            if (!sel(i, j - 1)) seg(i, j, i + 1, j);           // arriba
+            if (!sel(i, j + 1)) seg(i, j + 1, i + 1, j + 1);   // abajo
+            if (!sel(i - 1, j)) seg(i, j, i, j + 1);           // izquierda
+            if (!sel(i + 1, j)) seg(i + 1, j, i + 1, j + 1);   // derecha
+          }
+        });
+      };
+      addFaces(baseGeo, part.base);
+      addFaces(outerGeo, part.overlay);
+      const g = selLines.geometry;
+      g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      g.computeBoundingSphere();
     }
   }
 
@@ -265,7 +292,6 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
         partBaseVisible[name] = v;
         reg[name].base.visible = v && baseVisible;
         reg[name].grid.visible = v && baseVisible && gridVisible && !outerVisible;
-        reg[name].selBase.visible = v && baseVisible && selVisible;
       } else {
         partOuterVisible[name] = v;
         refreshOuter();
@@ -279,10 +305,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
       }
     },
     refreshOuter,
-    refreshSelection() { selTex.needsUpdate = true; },
+    setSelectionOutline(isSelected) { buildOutline(isSelected); },
     setSelectionVisible(v: boolean) { if (selVisible === v) return; selVisible = v; refreshSelVisibility(); },
     dispose() {
-      selTex.dispose();
       for (const d of disposables) d.dispose();
     },
   };
