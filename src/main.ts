@@ -154,6 +154,18 @@ let painting3d = false;
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
+// Cursor de pincel en 3D: anillo naranja sobre la superficie, del tamaño del grosor.
+const brushRingGeo = new THREE.RingGeometry(0.4, 0.5, 40);
+const brushRingMat = new THREE.MeshBasicMaterial({
+  color: 0xF4811F, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthTest: false,
+});
+const brushCursor = new THREE.Mesh(brushRingGeo, brushRingMat);
+brushCursor.renderOrder = 10;
+brushCursor.visible = false;
+scene.add(brushCursor);
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const tmpNormal = new THREE.Vector3();
+
 let symmetry = false;
 let symAxis: 'x' | 'z' = 'x';
 const mirrorRc = new THREE.Raycaster();
@@ -209,6 +221,21 @@ function paintFromEvent(e: PointerEvent, shift = false) {
 function hitsSkin(e: PointerEvent): boolean {
   castFromEvent(e);
   return !!pixelFromRaycaster(raycaster);
+}
+
+// Coloca el anillo de pincel sobre el punto de la skin, orientado y a tamaño del grosor.
+function updateBrushCursor(e: PointerEvent) {
+  const showTool = editor.tool === 'pencil' || editor.tool === 'eraser';
+  if (!showTool) { brushCursor.visible = false; return; }
+  castFromEvent(e);
+  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.face);
+  if (!hit || !hit.face) { brushCursor.visible = false; return; }
+  tmpNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld).normalize();
+  brushCursor.position.copy(hit.point).addScaledVector(tmpNormal, 0.1);
+  brushCursor.quaternion.setFromUnitVectors(Z_AXIS, tmpNormal);
+  const s = Math.max(1, editor.brushSize);
+  brushCursor.scale.set(s, s, 1);
+  brushCursor.visible = true;
 }
 
 // Bbox de una capa (base/overlay) de una parte en el atlas.
@@ -280,7 +307,8 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   painting3d = tool !== 'eyedropper' && tool !== 'fill';
   paintFromEvent(e, e.shiftKey);
 }, true);
-renderer.domElement.addEventListener('pointermove', (e) => { if (painting3d) paintFromEvent(e); });
+renderer.domElement.addEventListener('pointermove', (e) => { if (painting3d) paintFromEvent(e); updateBrushCursor(e); });
+renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; });
 window.addEventListener('pointerup', () => { painting3d = false; });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 

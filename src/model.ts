@@ -99,11 +99,11 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const partOuterVisible: Record<string, boolean> = {};
   const disposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
-  // Base: alpha-tested + doble cara, para que al borrar (alpha 0) deje el hueco
-  // transparente de verdad en el 3D en vez de pintarlo negro.
+  // Base: transparente con alphaTest bajo para que el DIFUMINADO (alfas suaves)
+  // se vea también en el 3D, y al borrar (alpha 0) siga dejando hueco real.
   const baseMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
-    alphaTest: 0.5, side: THREE.DoubleSide,
+    transparent: true, alphaTest: 0.04, depthWrite: true, side: THREE.DoubleSide,
   });
   // Capa externa: cara frontal sólo (FrontSide) — evita el borde fantasma que
   // creaban las caras traseras vistas a través de las transparentes.
