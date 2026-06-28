@@ -271,6 +271,22 @@ export class SkinEditor {
   isSelected(x: number, y: number): boolean { return this.inSel(x, y); }
   hasSelection(): boolean { return !!(this.selection || this.selMask); }
 
+  // Dibuja la punta del pincel (forma + difuminado) a tamaño real, `cell` px por píxel.
+  drawBrushPreview(ctx: CanvasRenderingContext2D, cell: number) {
+    const size = this.brushSize;
+    const w = size * cell;
+    ctx.canvas.width = w; ctx.canvas.height = w;
+    ctx.clearRect(0, 0, w, w);
+    for (let dy = 0; dy < size; dy++) {
+      for (let dx = 0; dx < size; dx++) {
+        const a = this.brushAlpha(dx, dy);
+        if (a === null) continue;
+        ctx.fillStyle = `rgba(244,129,31,${a})`;
+        ctx.fillRect(dx * cell, dy * cell, cell, cell);
+      }
+    }
+  }
+
   // Degradado lineal multi-stop A→B sobre la capa activa (o la selección).
   private applyGradient(a: { x: number; y: number }, b: { x: number; y: number }) {
     const stops = [...this.gradStops].sort((s1, s2) => s1.pos - s2.pos);

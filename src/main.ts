@@ -510,9 +510,27 @@ gridChk.addEventListener('change', () => { editor.showGrid = gridChk.checked; ed
 // ── Pincel: grosor, densidad, opacidad, fusión, bloquear alfa, simetría ──────
 const brushSizeInput = document.getElementById('brush-size') as HTMLInputElement;
 const brushSizeVal = document.getElementById('brush-size-val')!;
+
+// Mini-preview del pincel a la izquierda del slider (tamaño/forma/difuminado reales).
+const brushPrev = document.getElementById('brush-preview') as HTMLElement;
+const brushPrevCtx = (document.getElementById('brush-preview-cv') as HTMLCanvasElement).getContext('2d')!;
+const brushPrevLbl = document.getElementById('brush-preview-lbl')!;
+let brushPrevTimer = 0;
+function showBrushPreview() {
+  editor.drawBrushPreview(brushPrevCtx, 12);
+  brushPrevLbl.textContent = editor.brushSize + ' px';
+  brushPrev.hidden = false;
+  const r = brushSizeInput.getBoundingClientRect();
+  brushPrev.style.left = Math.max(8, r.left - brushPrev.offsetWidth - 14) + 'px';
+  brushPrev.style.top = (r.top + r.height / 2 - brushPrev.offsetHeight / 2) + 'px';
+  clearTimeout(brushPrevTimer);
+  brushPrevTimer = window.setTimeout(() => { brushPrev.hidden = true; }, 1200);
+}
+
 brushSizeInput.addEventListener('input', () => {
   editor.brushSize = +brushSizeInput.value;
   brushSizeVal.textContent = brushSizeInput.value + ' px';
+  showBrushPreview();
 });
 
 // forma del pincel (cuadrado / círculo)
@@ -521,6 +539,7 @@ document.querySelectorAll<HTMLButtonElement>('#brush-shape button').forEach(btn 
     document.querySelectorAll('#brush-shape button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     editor.brushShape = btn.dataset.shape as 'square' | 'circle';
+    showBrushPreview();
   });
 });
 
@@ -529,6 +548,7 @@ const brushDensityVal = document.getElementById('brush-density-val')!;
 brushDensityInput.addEventListener('input', () => {
   editor.feather = +brushDensityInput.value / 100;   // difuminado
   brushDensityVal.textContent = brushDensityInput.value + '%';
+  showBrushPreview();
 });
 
 const brushOpacityInput = document.getElementById('brush-opacity') as HTMLInputElement;
