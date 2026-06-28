@@ -194,6 +194,10 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
   display: flex; align-items: center; justify-content: center;
   font-size: 18px; padding: 0;
 }
+.tool img {
+  width: 28px; height: 28px; object-fit: contain;
+  pointer-events: none;
+}
 .tool.active { border-color: var(--accent); background: #1e1810; }
 
 .color-row { display: flex; align-items: center; gap: 10px; }
