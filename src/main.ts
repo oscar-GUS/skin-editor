@@ -965,3 +965,4 @@ setActive(0);
 applyStevePreset();
 renderLayers();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+

@@ -181,11 +181,24 @@ export class SkinEditor {
   }
 
   // Sello del pincel sobre la capa activa.
+  // El DIFUMINADO mezcla el color del pincel con lo que ya se ve debajo y escribe
+  // OPACO (no baja la transparencia), por eso se ve igual en la textura 2D y en el 3D.
   private stamp(cx: number, cy: number) {
     const size = this.brushSize;
     const start = -Math.floor((size - 1) / 2);
     const erase = this.tool === 'eraser';
     const ctx = this.tctx;
+    // ¿Se puede difuminar mezclando con el compuesto? (modo normal, sin borrar)
+    const blendFeather = !erase && this.brushBlend === 'source-over';
+    let comp: Uint8ClampedArray | null = null;
+    let cox = 0, coy = 0, cw = 0;
+    if (blendFeather && this.feather > 0 && size > 1) {
+      cox = Math.max(0, cx + start); coy = Math.max(0, cy + start);
+      const x2 = Math.min(TEX, cx + start + size), y2 = Math.min(TEX, cy + start + size);
+      cw = x2 - cox; const ch = y2 - coy;
+      if (cw > 0 && ch > 0) comp = this.sctx.getImageData(cox, coy, cw, ch).data;
+    }
+    const [br, bg, bb] = hexToRgb(this.color);
     ctx.save();
     if (erase) {
       ctx.globalCompositeOperation = 'destination-out';
@@ -206,6 +219,20 @@ export class SkinEditor {
         const a = (erase ? 1 : this.brushOpacity) * fa;
         if (a <= 0) continue;
         this.strokePainted.add(k);
+        // Borde difuminado: si hay color visible debajo, mézclalo y escribe opaco.
+        if (a < 1 && comp) {
+          const ci = ((y - coy) * cw + (x - cox)) * 4;
+          if (comp[ci + 3] > 0) {
+            const r = Math.round(br * a + comp[ci]     * (1 - a));
+            const g = Math.round(bg * a + comp[ci + 1] * (1 - a));
+            const b = Math.round(bb * a + comp[ci + 2] * (1 - a));
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(x, y, 1, 1);
+            ctx.fillStyle = this.color;
+            continue;
+          }
+        }
         ctx.globalAlpha = a;
         ctx.fillRect(x, y, 1, 1);
       }
