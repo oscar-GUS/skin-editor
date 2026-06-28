@@ -45,7 +45,10 @@
       </div>
 
       <div class="editor2d-wrap">
-        <span class="recents-label">Textura 2D</span>
+        <div class="section-head">
+          <span class="recents-label">Textura 2D</span>
+          <button id="swap-views" class="mini-btn" title="Llevar la textura 2D al centro y el 3D aquí">⇆ Centrar 2D</button>
+        </div>
         <div class="canvas-wrap">
           <canvas id="editor"></canvas>
         </div>
@@ -86,6 +89,8 @@
       </div>
 
       <div id="viewer">
+        <!-- Rectángulo de selección libre (marquee) sobre el modelo 3D -->
+        <div id="viewer-marquee" hidden></div>
         <!-- HUD de partes (abajo-izquierda): elegir qué se ve + capa interna/externa -->
         <div id="parts-hud" class="parts-hud" title="Partes visibles">
           <svg viewBox="0 0 60 90" class="hud-svg">
@@ -96,14 +101,14 @@
             <rect data-part="rightLeg" class="hud-part active" x="21" y="48" width="8"  height="30" rx="2"/>
             <rect data-part="leftLeg"  class="hud-part active" x="31" y="48" width="8"  height="30" rx="2"/>
           </svg>
-          <div class="hud-layers" id="layer-toggle" title="Capa de trabajo · clic = pintar · ojo = ver/ocultar">
+          <div class="hud-layers" id="layer-toggle" title="Capa de trabajo · clic en el nombre = pintar · interruptor = ver/ocultar">
             <div class="hud-layer-row active" data-layer="inner">
-              <button class="hud-eye" data-eye="inner" title="Ver/ocultar capa interna">👁</button>
               <span>Interna</span>
+              <button class="hud-eye hud-switch" data-eye="inner" role="switch" title="Ver/ocultar capa interna"><span class="knob"></span></button>
             </div>
             <div class="hud-layer-row" data-layer="outer">
-              <button class="hud-eye off" data-eye="outer" title="Ver/ocultar capa externa">👁</button>
               <span>Externa</span>
+              <button class="hud-eye hud-switch off" data-eye="outer" role="switch" title="Ver/ocultar capa externa"><span class="knob"></span></button>
             </div>
           </div>
         </div>

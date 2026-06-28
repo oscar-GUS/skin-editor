@@ -57,6 +57,7 @@ export interface SkinModel {
   refreshOuter(): void;          // recalcula qué capas exteriores están vacías
   setSelectionOutline(isSelected: (x: number, y: number) => boolean): void;  // recalcula el contorno de selección
   setSelectionVisible(v: boolean): void;  // muestra/oculta el contorno de selección
+  forEachTexel(layer: 'base' | 'overlay', cb: (ax: number, ay: number, world: THREE.Vector3, normal: THREE.Vector3) => void): void;
   dispose(): void;
 }
 
@@ -106,11 +107,11 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
   });
-  // Capa externa: cara frontal sólo (FrontSide) — evita el borde fantasma que
-  // creaban las caras traseras vistas a través de las transparentes.
+  // Capa externa: doble cara (se ve la textura por delante y por detrás de cada píxel),
+  // alpha-test alto para bordes nítidos y depthWrite para no ver líneas a través.
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
-    transparent: true, alphaTest: 0.01, side: THREE.FrontSide, depthWrite: false,
+    transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, depthWrite: true,
   });
   // Material para caras de la capa exterior SIN contenido: no dibuja nada.
   const hiddenMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
@@ -305,6 +306,29 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
       }
     },
     refreshOuter,
+    // Recorre el centro de cada texel de una capa dando su posición en el MUNDO 3D.
+    forEachTexel(layer, cb) {
+      for (const name in reg) {
+        const { base, outer, baseGeo, outerGeo, part } = reg[name];
+        const mesh = layer === 'overlay' ? outer : base;
+        const geo = layer === 'overlay' ? outerGeo : baseGeo;
+        const faces = layer === 'overlay' ? part.overlay : part.base;
+        mesh.updateWorldMatrix(true, false);
+        const pos = geo.attributes.position as THREE.BufferAttribute;
+        FACE_ORDER.forEach((fk, fi) => {
+          const R = faces[fk];
+          p0.fromBufferAttribute(pos, fi * 4 + 0);
+          pX.fromBufferAttribute(pos, fi * 4 + 1).sub(p0);
+          pY.fromBufferAttribute(pos, fi * 4 + 2).sub(p0);
+          tmpN.copy(pX).cross(pY).normalize().transformDirection(mesh.matrixWorld);  // normal en mundo
+          for (let j = 0; j < R.h; j++) for (let i = 0; i < R.w; i++) {
+            tmpA.copy(p0).addScaledVector(pX, (i + 0.5) / R.w).addScaledVector(pY, (j + 0.5) / R.h);
+            mesh.localToWorld(tmpA);
+            cb(R.x + i, R.y + j, tmpA, tmpN);
+          }
+        });
+      }
+    },
     setSelectionOutline(isSelected) { buildOutline(isSelected); },
     setSelectionVisible(v: boolean) { if (selVisible === v) return; selVisible = v; refreshSelVisibility(); },
     dispose() {

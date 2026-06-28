@@ -172,17 +172,35 @@ scene.add(brushCursor);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const tmpNormal = new THREE.Vector3();
 
-// Línea de previsualización del degradado A→B en el modelo 3D.
+// Línea + puntos A/B de previsualización del degradado en el modelo 3D.
 const gradLineGeo = new THREE.BufferGeometry();
 gradLineGeo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
 const gradLine = new THREE.Line(gradLineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false }));
 gradLine.renderOrder = 11; gradLine.visible = false; gradLine.frustumCulled = false;
 scene.add(gradLine);
 const gradPtA = new THREE.Vector3();
+const gradPtB = new THREE.Vector3();
+const gradMarkGeo = new THREE.SphereGeometry(0.7, 16, 12);
+function makeMark() {
+  const m = new THREE.Mesh(gradMarkGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
+  m.renderOrder = 12; m.visible = false; m.frustumCulled = false; scene.add(m); return m;
+}
+const gradMarkA = makeMark(), gradMarkB = makeMark();
+function gradStopColors(): [number, number, number] {
+  const stops = [...editor.gradStops].sort((a, b) => a.pos - b.pos);
+  return [stops[0]?.color ? hexToNum(stops[0].color) : 0xffffff,
+          stops[stops.length - 1]?.color ? hexToNum(stops[stops.length - 1].color) : 0xffffff, 0];
+}
+function hexToNum(hex: string): number { return parseInt(hex.slice(1), 16); }
 function setGradLine(a: THREE.Vector3, b: THREE.Vector3) {
   const p = gradLineGeo.attributes.position as THREE.BufferAttribute;
   p.setXYZ(0, a.x, a.y, a.z); p.setXYZ(1, b.x, b.y, b.z); p.needsUpdate = true;
+  const [cA, cB] = gradStopColors();
+  (gradMarkA.material as THREE.MeshBasicMaterial).color.setHex(cA);
+  (gradMarkB.material as THREE.MeshBasicMaterial).color.setHex(cB);
+  gradMarkA.position.copy(a); gradMarkB.position.copy(b);
 }
+function showGradGuides(v: boolean) { gradLine.visible = v; gradMarkA.visible = v; gradMarkB.visible = v; }
 
 let symmetry = false;
 let symAxis: 'x' | 'z' = 'x';
@@ -195,8 +213,19 @@ function normalToFace(n: THREE.Vector3): keyof Faces {
   return n.z > 0 ? 'front' : 'back';
 }
 
+// ¿Se puede pintar/seleccionar esta parte en la capa activa? Permite pintar la capa
+// externa aunque la interna esté oculta (raycast sobre la geometría base, siempre presente).
+function partPaintable(obj: THREE.Object3D): boolean {
+  const part = obj.userData.part as PartSpec | undefined;
+  const name = part?.name;
+  if (!name) return false;
+  return paintLayer === 'outer'
+    ? (partVis[name]?.outer ?? true) && outerVisible
+    : (partVis[name]?.base ?? true) && baseVisible;
+}
+
 function pixelFromRaycaster(rc: THREE.Raycaster): { x: number; y: number } | null {
-  const hit = rc.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
+  const hit = rc.intersectObjects(model.baseMeshes, false).find(h => h.uv && h.face && partPaintable(h.object));
   if (!hit || !hit.uv || !hit.face) return null;
   const fx = hit.uv.x * TEX, fy = (1 - hit.uv.y) * TEX;
   let x = Math.floor(fx), y = Math.floor(fy);
@@ -296,7 +325,7 @@ editor.onSelectPart = (x, y, mode) => {
 // Seleccionar en 3D: según el modo activo (bloque/cara/color/contiguo).
 function selectFromEvent(e: PointerEvent) {
   castFromEvent(e);
-  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
+  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.uv && h.face && partPaintable(h.object));
   if (!hit || !hit.uv || !hit.face) return;
   const part = hit.object.userData.part as PartSpec | undefined;
   if (!part) return;
@@ -310,30 +339,83 @@ function selectFromEvent(e: PointerEvent) {
   else { const r = partBBox(part, layer); editor.setSelectionRect(r.x, r.y, r.w, r.h); }   // rect/part → bloque
 }
 
-// Degradado arrastrado sobre el modelo 3D: texel inicial → texel final.
-let grad3dA: { x: number; y: number } | null = null;
-let grad3dB: { x: number; y: number } | null = null;
+// Punto 3D bajo el cursor (sobre la skin), para las guías del degradado.
+function hitPoint(e: PointerEvent): THREE.Vector3 | null {
+  castFromEvent(e);
+  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.uv && h.face && partPaintable(h.object));
+  return hit ? hit.point.clone() : null;
+}
 
-// Captura: decidimos pintar (y bloquear OrbitControls) o dejar que desplace/orbite.
+// Degradado 3D: arrastre A→B en el espacio de pantalla, proyectado sobre el modelo.
+let gradActive = false;
+function applyGradient3D() {
+  const layer: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
+  const a = gradPtA.clone().project(camera), b = gradPtB.clone().project(camera);
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const lenSq = abx * abx + aby * aby || 1e-6;
+  const tmp = new THREE.Vector3();
+  const samples: { x: number; y: number; t: number }[] = [];
+  model.forEachTexel(layer, (ax, ay, world) => {
+    tmp.copy(world).project(camera);
+    const t = ((tmp.x - a.x) * abx + (tmp.y - a.y) * aby) / lenSq;
+    samples.push({ x: ax, y: ay, t });
+  });
+  editor.applyGradientSamples(samples);
+}
+
+// Rectángulo de selección libre en 3D (marquee de pantalla).
+const marquee = document.getElementById('viewer-marquee') as HTMLElement;
+let mqActive = false;
+let mqStart = { x: 0, y: 0 };
+function mqUpdate(e: PointerEvent) {
+  const r = renderer.domElement.getBoundingClientRect();
+  const x0 = Math.min(mqStart.x, e.clientX) - r.left, y0 = Math.min(mqStart.y, e.clientY) - r.top;
+  marquee.style.left = x0 + 'px'; marquee.style.top = y0 + 'px';
+  marquee.style.width = Math.abs(e.clientX - mqStart.x) + 'px';
+  marquee.style.height = Math.abs(e.clientY - mqStart.y) + 'px';
+}
+function mqFinish(e: PointerEvent) {
+  marquee.hidden = true;
+  const r = renderer.domElement.getBoundingClientRect();
+  const toNdc = (cx: number, cy: number) => ({ x: ((cx - r.left) / r.width) * 2 - 1, y: -((cy - r.top) / r.height) * 2 + 1 });
+  const a = toNdc(mqStart.x, mqStart.y), b = toNdc(e.clientX, e.clientY);
+  if (Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01) { editor.clearSelection(); return; }  // clic = quitar
+  const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x), minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+  const layer: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
+  const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
+  const mask = new Uint8Array(TEX * TEX);
+  const tmp = new THREE.Vector3();
+  model.forEachTexel(layer, (ax, ay, world, normal) => {
+    if (normal.dot(camDir) >= 0) return;            // solo caras que miran a la cámara
+    tmp.copy(world).project(camera);
+    if (tmp.z < 1 && tmp.x >= minX && tmp.x <= maxX && tmp.y >= minY && tmp.y <= maxY) mask[ay * TEX + ax] = 1;
+  });
+  editor.applyMaskSelection(mask);
+}
+
+// Captura: decidimos pintar/seleccionar/degradar (y bloquear OrbitControls) o dejar orbitar.
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;               // derecho orbita (OrbitControls)
   const tool = editor.tool;
   if (tool === 'select') {
-    // shift = sumar · ctrl/cmd = restar · sin modificador = reemplazar
     editor.selOp = e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace';
-    if (hitsSkin(e)) { selectFromEvent(e); e.stopImmediatePropagation(); }
-    return;                                 // clic en vacío → OrbitControls desplaza
+    if (editor.selectMode === 'rect') {     // rectángulo LIBRE por arrastre (no selecciona el bloque)
+      mqActive = true; mqStart = { x: e.clientX, y: e.clientY };
+      const r = renderer.domElement.getBoundingClientRect();
+      marquee.style.left = (e.clientX - r.left) + 'px'; marquee.style.top = (e.clientY - r.top) + 'px';
+      marquee.style.width = '0px'; marquee.style.height = '0px'; marquee.hidden = false;
+      e.stopImmediatePropagation();
+    } else if (hitsSkin(e)) { selectFromEvent(e); e.stopImmediatePropagation(); }
+    return;
   }
   if (tool === 'gradient') {
-    castFromEvent(e);
-    const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
-    const p = pixelFromRaycaster(raycaster);
-    if (hit && p) {
-      grad3dA = p; grad3dB = p;
-      gradPtA.copy(hit.point); setGradLine(gradPtA, gradPtA); gradLine.visible = true;
+    const pt = hitPoint(e);
+    if (pt) {
+      gradActive = true; gradPtA.copy(pt); gradPtB.copy(pt);
+      setGradLine(gradPtA, gradPtB); showGradGuides(true);
       e.stopImmediatePropagation();
     }
-    return;                                 // clic en vacío → OrbitControls desplaza
+    return;
   }
   if (!hitsSkin(e)) return;                 // vacío → desplazar (pan)
   e.stopImmediatePropagation();             // sobre la skin → pintar, sin pan
@@ -343,21 +425,15 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 }, true);
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (painting3d) paintFromEvent(e);
-  if (grad3dA) {
-    castFromEvent(e);
-    const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.uv && h.face);
-    const p = pixelFromRaycaster(raycaster);
-    if (p) grad3dB = p;
-    if (hit) setGradLine(gradPtA, hit.point);   // previsualiza la línea A→B
-  }
+  if (mqActive) mqUpdate(e);
+  if (gradActive) { const pt = hitPoint(e); if (pt) { gradPtB.copy(pt); setGradLine(gradPtA, gradPtB); } }
   updateBrushCursor(e);
 });
 renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; });
-window.addEventListener('pointerup', () => {
+window.addEventListener('pointerup', (e) => {
   painting3d = false;
-  if (grad3dA && grad3dB) editor.applyGradientBetween(grad3dA, grad3dB);   // aplica el degradado A→B
-  grad3dA = grad3dB = null;
-  gradLine.visible = false;
+  if (gradActive) { applyGradient3D(); gradActive = false; showGradGuides(false); }
+  if (mqActive) { mqFinish(e); mqActive = false; }
 });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -994,7 +1070,8 @@ window.addEventListener('drop', (e) => {
 // ── Redimensionar columnas laterales (arrastre, responsive con centro mínimo) ─
 {
   const layout = document.getElementById('layout')!;
-  const minLeft = 200, maxLeft = 480, minRight = 220, maxRight = 500, minCenter = 320;
+  // minRight: ancho suficiente para que la fila de herramientas no oculte la última.
+  const minLeft = 200, maxLeft = 480, minRight = 300, maxRight = 520, minCenter = 320;
   const cssVar = (name: string) => parseFloat(getComputedStyle(layout).getPropertyValue(name));
   const drag = (handle: HTMLElement, side: 'left' | 'right') => {
     handle.addEventListener('pointerdown', (e) => {
@@ -1030,6 +1107,23 @@ window.addEventListener('drop', (e) => {
   drag(document.getElementById('resize-right') as HTMLElement, 'right');
 }
 
+// ── Intercambiar la textura 2D con la vista 3D (2D al centro para trabajar) ───
+{
+  let swapped = false;
+  const swapBtn = document.getElementById('swap-views') as HTMLButtonElement;
+  const ed2d = document.querySelector('.editor2d-wrap') as HTMLElement;
+  swapBtn.addEventListener('click', () => {
+    const vParent = viewer.parentNode!, vNext = viewer.nextSibling;
+    const eParent = ed2d.parentNode!, eNext = ed2d.nextSibling;
+    eParent.insertBefore(viewer, eNext);
+    vParent.insertBefore(ed2d, vNext);
+    swapped = !swapped;
+    document.body.classList.toggle('views-swapped', swapped);
+    swapBtn.textContent = swapped ? '⇆ Volver' : '⇆ Centrar 2D';
+    resize();
+  });
+}
+
 // ── Init: capa base con la skin Steve por defecto ────────────────────────────
 layers = [{ id: 0, name: 'Skin base', canvas: blankCanvas(), visible: true, blend: 'source-over' }];
 setActive(0);
@@ -1037,6 +1131,7 @@ applyStevePreset();
 renderLayers();
 updateBlockGuides();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+
 
 
 

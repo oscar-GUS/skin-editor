@@ -143,11 +143,20 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .hud-layer-row.active { border-color: var(--accent); background: #1e1810; }
 .hud-layer-row span { font-size: 11px; font-weight: 600; color: var(--text-sec); }
 .hud-layer-row.active span { color: var(--text); }
-.hud-eye {
-  padding: 0; width: 20px; height: 20px; font-size: 11px; line-height: 1;
-  background: none; border: none; flex-shrink: 0;
+/* Interruptor deslizante de visibilidad de capa (derecha = ON, izquierda = OFF) */
+.hud-switch {
+  position: relative; flex-shrink: 0;
+  width: 34px; height: 18px; padding: 0; border: none; border-radius: 9px;
+  background: var(--accent); transition: background 0.15s; cursor: pointer;
 }
-.hud-eye.off { opacity: 0.35; filter: grayscale(1); }
+.hud-switch .knob {
+  position: absolute; top: 2px; left: 18px; width: 14px; height: 14px;
+  border-radius: 50%; background: #fff; transition: left 0.15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.4);
+}
+.hud-switch.off { background: #3a3a3e; }
+.hud-switch.off .knob { left: 2px; }
+.hud-layer-row { justify-content: space-between; }
 
 /* Panel de selección */
 .select-panel { display: flex; flex-direction: column; gap: 8px; }
@@ -420,6 +429,23 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 
 #viewer { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; }
 #viewer > canvas { display: block; position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; }
+
+/* Rectángulo de selección libre (marquee) sobre el 3D */
+#viewer-marquee {
+  position: absolute; z-index: 8; pointer-events: none;
+  border: 1.5px dashed var(--accent); background: rgba(244,129,31,0.12);
+  border-radius: 2px;
+}
+#viewer-marquee[hidden] { display: none; }
+
+/* Vista intercambiada: la textura 2D pasa al centro y el 3D a la izquierda */
+.views-swapped .col-center { padding: 16px; overflow: auto; }
+.views-swapped .col-center .editor2d-wrap {
+  width: 100%; max-width: min(100%, 72vh); margin: 0 auto;
+}
+.views-swapped .col-left #viewer {
+  min-height: 300px; border: 1px solid var(--border); border-radius: var(--radius);
+}
 
 /* ── Mini-preview del pincel ────────────────────── */
 #brush-preview {

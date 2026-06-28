@@ -385,6 +385,59 @@ export class SkinEditor {
   // Aplica el degradado A→B desde fuera (p. ej. arrastrando sobre el modelo 3D).
   applyGradientBetween(a: { x: number; y: number }, b: { x: number; y: number }) { this.applyGradient(a, b); }
 
+  // Color del degradado (multi-stop) en la posición t∈[0,1]. Devuelve [r,g,b,a 0..255].
+  gradientColorAt(t: number): [number, number, number, number] {
+    const stops = [...this.gradStops].sort((s1, s2) => s1.pos - s2.pos);
+    if (stops.length === 0) return [0, 0, 0, 0];
+    t = Math.max(0, Math.min(1, t));
+    if (t <= stops[0].pos) { const [r, g, b] = hexToRgb(stops[0].color); return [r, g, b, Math.round(stops[0].a * 255)]; }
+    const last = stops[stops.length - 1];
+    if (t >= last.pos) { const [r, g, b] = hexToRgb(last.color); return [r, g, b, Math.round(last.a * 255)]; }
+    for (let i = 0; i < stops.length - 1; i++) {
+      const s0 = stops[i], s1 = stops[i + 1];
+      if (t >= s0.pos && t <= s1.pos) {
+        const f = s1.pos === s0.pos ? 0 : (t - s0.pos) / (s1.pos - s0.pos);
+        const c0 = hexToRgb(s0.color), c1 = hexToRgb(s1.color);
+        return [
+          Math.round(c0[0] + (c1[0] - c0[0]) * f),
+          Math.round(c0[1] + (c1[1] - c0[1]) * f),
+          Math.round(c0[2] + (c1[2] - c0[2]) * f),
+          Math.round((s0.a + (s1.a - s0.a) * f) * 255),
+        ];
+      }
+    }
+    const [r, g, b] = hexToRgb(last.color); return [r, g, b, Math.round(last.a * 255)];
+  }
+
+  // Aplica el degradado por MUESTRAS (cada texel con su t), para el degradado 3D
+  // proyectado: el patrón fluye por el modelo como se ve, no por rectángulo de atlas.
+  applyGradientSamples(samples: { x: number; y: number; t: number }[]) {
+    if (samples.length === 0) return;
+    this.pushUndo();
+    const img = this.tctx.getImageData(0, 0, TEX, TEX);
+    const d = img.data;
+    for (const s of samples) {
+      if (s.x < 0 || s.y < 0 || s.x >= TEX || s.y >= TEX) continue;
+      if (!this.inSel(s.x, s.y)) continue;
+      const i = (s.y * TEX + s.x) * 4;
+      if (this.lockAlpha && d[i + 3] === 0) continue;
+      const [r, g, b, a] = this.gradientColorAt(s.t);
+      const op = this.brushOpacity * (a / 255);
+      if (op <= 0) continue;
+      const inv = 1 - op;
+      d[i]     = Math.round(r * op + d[i] * inv);
+      d[i + 1] = Math.round(g * op + d[i + 1] * inv);
+      d[i + 2] = Math.round(b * op + d[i + 2] * inv);
+      d[i + 3] = Math.max(d[i + 3], Math.round(op * 255));
+    }
+    this.tctx.putImageData(img, 0, 0);
+    for (const st of this.gradStops) this.onUse(st.color);
+    this.onChange(); this.render();
+  }
+
+  // Selección por máscara desde fuera (p. ej. rectángulo libre proyectado del 3D).
+  applyMaskSelection(mask: Uint8Array) { this.setMask(mask); }
+
   // Degradado lineal multi-stop A→B sobre la capa activa (o la selección).
   private applyGradient(a: { x: number; y: number }, b: { x: number; y: number }) {
     const stops = [...this.gradStops].sort((s1, s2) => s1.pos - s2.pos);
