@@ -42,6 +42,7 @@ export class SkinEditor {
   // Selección: rectángulo simple y/o máscara por píxel (color/contiguo).
   selection: { x: number; y: number; w: number; h: number } | null = null;
   private selMask: Uint8Array | null = null;
+  selOp: 'replace' | 'add' | 'subtract' = 'replace';   // shift=sumar, ctrl=restar
   private clipboard: ImageData | null = null;
 
   // Cursor (para previsualizar el grosor) y arrastre (degradado/selección)
@@ -85,6 +86,8 @@ export class SkinEditor {
       const p = toTex(e);
       display.setPointerCapture(e.pointerId);
       if (this.tool === 'select') {
+        // shift = sumar zona · ctrl/cmd = restar · sin modificador = reemplazar
+        this.selOp = e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace';
         if (this.selectMode === 'rect') { dragging = true; this.dragA = p; this.dragB = p; this.render(); }
         else if (this.selectMode === 'color') this.selectByColor(p.x, p.y);
         else if (this.selectMode === 'colorContiguous') this.selectContiguous(p.x, p.y);
@@ -173,10 +176,10 @@ export class SkinEditor {
       d = Math.max(Math.abs(nx), Math.abs(ny)) / half;   // distancia "cuadrada"
     }
     if (this.feather <= 0) return 1;
-    const core = 1 - this.feather;                  // radio sólido (sin caída)
+    const core = Math.pow(1 - this.feather, 1.4);   // radio sólido (encoge rápido al subir difuminado)
     if (d <= core) return 1;
-    const t = (d - core) / (1 - core);
-    const a = 1 - Math.min(1, Math.max(0, t));
+    const t = Math.min(1, Math.max(0, (d - core) / (1 - core)));
+    const a = 1 - t * t * (3 - 2 * t);              // caída suave (smoothstep) hacia el borde
     return a <= 0 ? null : a;
   }
 
@@ -291,7 +294,7 @@ export class SkinEditor {
 
   // ¿El píxel está dentro de la selección activa? (sin selección, todo vale)
   private inSel(x: number, y: number): boolean {
-    if (this.selMask) return this.selMask[y * TEX + x] === 1;
+    if (this.selMask) return x >= 0 && y >= 0 && x < TEX && y < TEX && this.selMask[y * TEX + x] === 1;
     const s = this.selection;
     return !s || (x >= s.x && x < s.x + s.w && y >= s.y && y < s.y + s.h);
   }
@@ -313,6 +316,9 @@ export class SkinEditor {
       }
     }
   }
+
+  // Aplica el degradado A→B desde fuera (p. ej. arrastrando sobre el modelo 3D).
+  applyGradientBetween(a: { x: number; y: number }, b: { x: number; y: number }) { this.applyGradient(a, b); }
 
   // Degradado lineal multi-stop A→B sobre la capa activa (o la selección).
   private applyGradient(a: { x: number; y: number }, b: { x: number; y: number }) {
@@ -337,28 +343,59 @@ export class SkinEditor {
   // ── Selección ──────────────────────────────────────────────────────────────
   private commitSelection() { this.render(); this.startAnts(); this.onSelectionChange(); }
 
+  // Máscara de la selección actual (rect o máscara) como array; vacía si no hay.
+  private currentMask(): Uint8Array {
+    const m = new Uint8Array(TEX * TEX);
+    if (this.selMask) m.set(this.selMask);
+    else if (this.selection) {
+      const s = this.selection;
+      for (let y = s.y; y < s.y + s.h; y++) for (let x = s.x; x < s.x + s.w; x++) m[y * TEX + x] = 1;
+    }
+    return m;
+  }
+
+  private rectMask(x: number, y: number, w: number, h: number): Uint8Array {
+    const m = new Uint8Array(TEX * TEX);
+    for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++)
+      if (xx >= 0 && yy >= 0 && xx < TEX && yy < TEX) m[yy * TEX + xx] = 1;
+    return m;
+  }
+
   private setSelectionFromDrag(a: { x: number; y: number }, b: { x: number; y: number }) {
     const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
     const w = Math.abs(b.x - a.x) + 1, h = Math.abs(b.y - a.y) + 1;
-    this.selMask = null;
-    this.selection = (w <= 1 && h <= 1) ? null : { x, y, w, h };   // clic simple = quitar
-    this.commitSelection();
+    if (this.selOp === 'replace') {
+      this.selMask = null;
+      this.selection = (w <= 1 && h <= 1) ? null : { x, y, w, h };   // clic simple = quitar
+      this.commitSelection();
+    } else {
+      this.setMask(this.rectMask(x, y, w, h));
+    }
   }
 
   clearSelection() { this.selection = null; this.selMask = null; this.stopAnts(); this.render(); this.onSelectionChange(); }
 
   // Fija la selección a un rectángulo concreto (parte/cara, desde 2D o 3D).
   setSelectionRect(x: number, y: number, w: number, h: number) {
-    this.selMask = null;
-    this.selection = {
-      x: Math.round(x), y: Math.round(y),
-      w: Math.max(1, Math.round(w)), h: Math.max(1, Math.round(h)),
-    };
-    this.commitSelection();
+    x = Math.round(x); y = Math.round(y); w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+    if (this.selOp === 'replace') {
+      this.selMask = null;
+      this.selection = { x, y, w, h };
+      this.commitSelection();
+    } else {
+      this.setMask(this.rectMask(x, y, w, h));
+    }
   }
 
-  // Selección por máscara (color / contiguo). Calcula también el bbox para pegar.
+  // Selección por máscara (color/contiguo/rect combinado). Aplica sumar/restar y bbox.
   private setMask(mask: Uint8Array) {
+    if (this.selOp !== 'replace') {
+      const cur = this.currentMask();
+      for (let i = 0; i < mask.length; i++) {
+        mask[i] = this.selOp === 'add' ? (mask[i] || cur[i] ? 1 : 0)
+                                       : (cur[i] && !mask[i] ? 1 : 0);   // restar
+      }
+    }
     let minX = TEX, minY = TEX, maxX = -1, maxY = -1, any = false;
     for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
       if (mask[y * TEX + x]) { any = true; minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
@@ -373,7 +410,7 @@ export class SkinEditor {
   selectByColor(x: number, y: number) {
     const img = this.sctx.getImageData(0, 0, TEX, TEX).data;
     const i0 = (y * TEX + x) * 4;
-    if (img[i0 + 3] === 0) { this.clearSelection(); return; }
+    if (img[i0 + 3] === 0) { if (this.selOp === 'replace') this.clearSelection(); return; }
     const r = img[i0], g = img[i0 + 1], b = img[i0 + 2];
     const mask = new Uint8Array(TEX * TEX);
     for (let k = 0; k < TEX * TEX; k++) {
@@ -420,12 +457,19 @@ export class SkinEditor {
     this.onChange(); this.render();
   }
 
-  // Pinta la máscara de selección (naranja) en un contexto 64×64, para el 3D.
+  // Pinta SOLO el borde de la selección (naranja) en un contexto 64×64, para el 3D:
+  // un contorno fino sobre los texeles del límite, no un relleno que tape la zona.
   fillSelectionMask(ctx: CanvasRenderingContext2D) {
     ctx.clearRect(0, 0, TEX, TEX);
     if (!this.hasSelection()) return;
-    ctx.fillStyle = 'rgba(244,129,31,0.85)';
-    for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) if (this.inSel(x, y)) ctx.fillRect(x, y, 1, 1);
+    ctx.fillStyle = 'rgba(244,129,31,1)';
+    for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
+      if (!this.inSel(x, y)) continue;
+      // texel del borde = seleccionado con algún vecino (4-conexo) fuera de la selección
+      if (!this.inSel(x - 1, y) || !this.inSel(x + 1, y) || !this.inSel(x, y - 1) || !this.inSel(x, y + 1)) {
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
   }
 
   // ── Marching ants (2D) ───────────────────────────────────────────────────────

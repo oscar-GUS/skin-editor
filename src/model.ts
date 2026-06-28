@@ -226,6 +226,8 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
       outer.visible = partOuterVisible[name] && outerVisible && alguna;
       // La cuadrícula externa es una guía: visible aunque la capa esté vacía (solo líneas).
       gridOuter.visible = gridVisible && partOuterVisible[name] && outerVisible;
+      // La interior se oculta mientras se ve la exterior (no solapar dos cuadrículas).
+      reg[name].grid.visible = gridVisible && baseVisible && partBaseVisible[name] && !outerVisible;
     }
     refreshSelVisibility();
   }
@@ -246,14 +248,14 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
       baseVisible = v;
       for (const name in reg) {
         reg[name].base.visible = v && partBaseVisible[name];
-        reg[name].grid.visible = v && partBaseVisible[name] && gridVisible;
+        reg[name].grid.visible = v && partBaseVisible[name] && gridVisible && !outerVisible;
       }
       refreshSelVisibility();
     },
     setGridVisible(v: boolean) {
       gridVisible = v;
       for (const name in reg) {
-        reg[name].grid.visible = v && baseVisible && partBaseVisible[name];
+        reg[name].grid.visible = v && baseVisible && partBaseVisible[name] && !outerVisible;
       }
       refreshOuter();   // recalcula la cuadrícula externa
     },
@@ -262,7 +264,7 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
       if (layer === 'base') {
         partBaseVisible[name] = v;
         reg[name].base.visible = v && baseVisible;
-        reg[name].grid.visible = v && baseVisible && gridVisible;
+        reg[name].grid.visible = v && baseVisible && gridVisible && !outerVisible;
         reg[name].selBase.visible = v && baseVisible && selVisible;
       } else {
         partOuterVisible[name] = v;

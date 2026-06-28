@@ -76,6 +76,13 @@
           </select>
         </label>
         <label class="check"><input type="checkbox" id="grid3d"> Cuadrícula 3D</label>
+        <div class="tb-group" title="Fondo del visor">
+          <span class="tb-label">Fondo</span>
+          <input type="color" id="bg-color" value="#0D0D0F" title="Color de fondo">
+          <input type="file" id="bg-image" accept="image/*" hidden>
+          <button id="bg-image-btn" class="tb-mini" title="Imagen de fondo">Imagen</button>
+          <button id="bg-reset" class="tb-mini" title="Restablecer fondo">Reset</button>
+        </div>
       </div>
 
       <div id="viewer">
@@ -171,7 +178,7 @@
           <button id="sel-paste">Pegar</button>
           <button id="sel-clear">Quitar</button>
         </div>
-        <p class="grad-hint">Marca una zona para limitar dónde pintas — funciona en la textura 2D y en el modelo 3D.</p>
+        <p class="grad-hint">Marca una zona para limitar dónde pintas (2D y 3D). <strong>Shift</strong> suma · <strong>Ctrl</strong> resta.</p>
       </div>
 
       <!-- Degradado multi-stop (visible solo con la herramienta degradado) -->
@@ -193,7 +200,7 @@
           </div>
           <button id="grad-stop-del" class="mini-btn">Quitar</button>
         </div>
-        <p class="grad-hint">Clic en la barra = nuevo punto · arrastra los puntos para moverlos · luego arrastra A→B sobre la textura 2D para aplicarlo.</p>
+        <p class="grad-hint">Clic en la barra = nuevo punto · arrastra los puntos para moverlos · luego arrastra A→B sobre la textura 2D o sobre el modelo 3D para aplicarlo.</p>
       </div>
 
       <div class="color-row">

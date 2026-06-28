@@ -144,8 +144,8 @@ resize();
 
 renderer.setAnimationLoop(() => {
   controls.update();
-  // Selección en 3D: parpadeo naranja intermitente (marching ants).
-  model.setSelectionVisible(editor.hasSelection() && Math.floor(performance.now() / 380) % 2 === 0);
+  // Selección en 3D: contorno naranja fino y fijo (sin parpadeo).
+  model.setSelectionVisible(editor.hasSelection());
   renderer.render(scene, camera);
 });
 
@@ -292,24 +292,43 @@ function selectFromEvent(e: PointerEvent) {
   else { const r = partBBox(part, layer); editor.setSelectionRect(r.x, r.y, r.w, r.h); }   // rect/part → bloque
 }
 
+// Degradado arrastrado sobre el modelo 3D: texel inicial → texel final.
+let grad3dA: { x: number; y: number } | null = null;
+let grad3dB: { x: number; y: number } | null = null;
+
 // Captura: decidimos pintar (y bloquear OrbitControls) o dejar que desplace/orbite.
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;               // derecho orbita (OrbitControls)
   const tool = editor.tool;
   if (tool === 'select') {
+    // shift = sumar · ctrl/cmd = restar · sin modificador = reemplazar
+    editor.selOp = e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace';
     if (hitsSkin(e)) { selectFromEvent(e); e.stopImmediatePropagation(); }
     return;                                 // clic en vacío → OrbitControls desplaza
   }
-  if (tool === 'gradient') return;          // el degradado se aplica en la textura 2D
+  if (tool === 'gradient') {
+    castFromEvent(e);
+    const p = pixelFromRaycaster(raycaster);
+    if (p) { grad3dA = p; grad3dB = p; e.stopImmediatePropagation(); }   // arranca el arrastre del degradado
+    return;                                 // clic en vacío → OrbitControls desplaza
+  }
   if (!hitsSkin(e)) return;                 // vacío → desplazar (pan)
   e.stopImmediatePropagation();             // sobre la skin → pintar, sin pan
   if (tool !== 'eyedropper') editor.pushUndo();
   painting3d = tool !== 'eyedropper' && tool !== 'fill';
   paintFromEvent(e, e.shiftKey);
 }, true);
-renderer.domElement.addEventListener('pointermove', (e) => { if (painting3d) paintFromEvent(e); updateBrushCursor(e); });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (painting3d) paintFromEvent(e);
+  if (grad3dA) { castFromEvent(e); const p = pixelFromRaycaster(raycaster); if (p) grad3dB = p; }
+  updateBrushCursor(e);
+});
 renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; });
-window.addEventListener('pointerup', () => { painting3d = false; });
+window.addEventListener('pointerup', () => {
+  painting3d = false;
+  if (grad3dA && grad3dB) editor.applyGradientBetween(grad3dA, grad3dB);   // aplica el degradado A→B
+  grad3dA = grad3dB = null;
+});
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ── UI wiring ────────────────────────────────────────────────────────────────
@@ -426,13 +445,13 @@ function updateToolUI(tool: Tool) {
   showEl('grad-panel', tool === 'gradient');
   showEl('select-panel', tool === 'select');
 }
+function selectTool(tool: Tool) {
+  document.querySelectorAll<HTMLElement>('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));
+  editor.tool = tool;
+  updateToolUI(tool);
+}
 document.querySelectorAll<HTMLButtonElement>('.tool').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    editor.tool = btn.dataset.tool as Tool;
-    updateToolUI(editor.tool);
-  });
+  btn.addEventListener('click', () => selectTool(btn.dataset.tool as Tool));
 });
 updateToolUI(editor.tool);
 
@@ -488,7 +507,8 @@ function setColor(hex: string, recent = true) {
   if (recent) addRecent(hex);
 }
 colorInput.addEventListener('input', () => setColor(colorInput.value));
-editor.onColorPick = (hex) => setColor(hex);   // cuentagotas (2D / 3D)
+// Cuentagotas (2D / 3D): toma el color y pasa directo a pincel para pintar.
+editor.onColorPick = (hex) => { setColor(hex); selectTool('pencil'); };
 editor.onUse = (hex) => addRecent(hex);         // lápiz / relleno
 
 // swatches base
@@ -733,8 +753,12 @@ function setPaintLayer(layer: 'inner' | 'outer') {
   paintLayer = layer;
   document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(r =>
     r.classList.toggle('active', r.dataset.layer === layer));
-  if (layer === 'outer') { outerVisible = true; model.setOuterVisible(true); setEye('outer', true); }
-  else { baseVisible = true; model.setBaseVisible(true); setEye('inner', true); }
+  if (layer === 'outer') {
+    outerVisible = true; model.setOuterVisible(true); setEye('outer', true);
+    baseVisible = true; model.setBaseVisible(true); setEye('inner', true);   // interior siempre visible debajo
+  } else {
+    baseVisible = true; model.setBaseVisible(true); setEye('inner', true);
+  }
   syncPartHud();
 }
 document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(row => {
@@ -763,6 +787,23 @@ function syncPartHud() {
 // 3D grid
 const grid3dChk = document.getElementById('grid3d') as HTMLInputElement;
 grid3dChk.addEventListener('change', () => { gridVisible = grid3dChk.checked; model.setGridVisible(gridVisible); });
+
+// Fondo del visor (color o imagen), como en el visor de schematics.
+const bgColor = document.getElementById('bg-color') as HTMLInputElement;
+const bgImageInput = document.getElementById('bg-image') as HTMLInputElement;
+let bgImageUrl: string | null = null;
+function clearBgImage() { if (bgImageUrl) { URL.revokeObjectURL(bgImageUrl); bgImageUrl = null; } }
+bgColor.addEventListener('input', () => { clearBgImage(); viewer.style.background = bgColor.value; });
+document.getElementById('bg-image-btn')!.addEventListener('click', () => bgImageInput.click());
+bgImageInput.addEventListener('change', () => {
+  const f = bgImageInput.files?.[0];
+  if (!f) return;
+  clearBgImage();
+  bgImageUrl = URL.createObjectURL(f);
+  viewer.style.background = `#000 url("${bgImageUrl}") center / cover no-repeat`;
+  bgImageInput.value = '';
+});
+document.getElementById('bg-reset')!.addEventListener('click', () => { clearBgImage(); viewer.style.background = ''; bgColor.value = '#0D0D0F'; });
 
 // poses
 const poseSel = document.getElementById('pose') as HTMLSelectElement;
@@ -965,4 +1006,5 @@ setActive(0);
 applyStevePreset();
 renderLayers();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+
 
