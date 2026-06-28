@@ -412,8 +412,12 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
       const r = renderer.domElement.getBoundingClientRect();
       marquee.style.left = (e.clientX - r.left) + 'px'; marquee.style.top = (e.clientY - r.top) + 'px';
       marquee.style.width = '0px'; marquee.style.height = '0px'; marquee.hidden = false;
-      e.stopImmediatePropagation();
-    } else if (hitsSkin(e)) { selectFromEvent(e); e.stopImmediatePropagation(); }
+    } else if (hitsSkin(e)) {
+      selectFromEvent(e);
+    } else {
+      editor.clearSelection();              // clic fuera de la skin = quitar la selección
+    }
+    e.stopImmediatePropagation();
     return;
   }
   if (tool === 'gradient') {
@@ -474,6 +478,29 @@ function buildVisibleLayerMask(): Uint8Array {
   return m;
 }
 editor.colorRestrict = buildVisibleLayerMask;
+
+// Mapa de simetría (texel -> su texel espejo respecto al eje) para el relleno con
+// simetría: cada texel se empareja con el de la posición 3D reflejada.
+function buildMirrorMap(): Int32Array | null {
+  if (!symmetry) return null;
+  const which: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
+  const keyOf = (x: number, y: number, z: number) => `${Math.round(x * 2)}|${Math.round(y * 2)}|${Math.round(z * 2)}`;
+  const pos = new Map<string, number>();
+  const ent: { idx: number; x: number; y: number; z: number }[] = [];
+  model.forEachTexel(which, (ax, ay, world) => {
+    const idx = ay * TEX + ax;
+    pos.set(keyOf(world.x, world.y, world.z), idx);
+    ent.push({ idx, x: world.x, y: world.y, z: world.z });
+  });
+  const map = new Int32Array(TEX * TEX).fill(-1);
+  for (const e of ent) {
+    const mx = symAxis === 'x' ? -e.x : e.x, mz = symAxis === 'z' ? -e.z : e.z;
+    const m = pos.get(keyOf(mx, e.y, mz));
+    if (m !== undefined) map[e.idx] = m;
+  }
+  return map;
+}
+editor.fillMirror = buildMirrorMap;
 
 // atajos: deshacer, copiar/pegar selección, quitar selección
 window.addEventListener('keydown', (e) => {
@@ -572,8 +599,8 @@ function updateToolUI(tool: Tool) {
   showEl('row-shape', brush);
   showEl('row-feather', brush);
   showEl('row-opacity', tool === 'pencil' || tool === 'eraser' || tool === 'fill' || tool === 'gradient');
-  showEl('row-blend', tool === 'pencil');
-  showEl('row-toggles', brush);
+  showEl('row-blend', tool === 'pencil' || tool === 'fill');
+  showEl('row-toggles', brush || tool === 'fill');   // relleno: bloquear alfa + simetría
   showEl('grad-panel', tool === 'gradient');
   showEl('select-panel', tool === 'select');
 }
@@ -621,6 +648,7 @@ function renderRecents() {
       b.style.background = hex;
       b.title = hex;
       b.addEventListener('click', () => setColor(hex, false));
+      dragColor(b, () => hex);
     } else {
       b.className = 'recent empty';
       b.disabled = true;
@@ -643,6 +671,35 @@ colorInput.addEventListener('input', () => setColor(colorInput.value));
 editor.onColorPick = (hex) => { setColor(hex); selectTool('pencil'); };
 editor.onUse = (hex) => addRecent(hex);         // lápiz / relleno
 
+// ── Arrastrar colores: de paletas/recientes/skin al selector, o a la skin ─────
+// Soltar un color en la skin = bote de pintura (rellena la selección o toda la skin).
+function dragColor(el: HTMLElement, getHex: () => string) {
+  el.setAttribute('draggable', 'true');
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer!.setData('text/x-color', getHex());
+    e.dataTransfer!.effectAllowed = 'copy';
+  });
+}
+function colorFromDrop(e: DragEvent): string | null {
+  const c = e.dataTransfer?.getData('text/x-color');
+  if (!c) return null;
+  return /^#?[0-9a-f]{6}$/i.test(c) ? (c[0] === '#' ? c.toLowerCase() : '#' + c.toLowerCase()) : null;
+}
+function dropTarget(el: HTMLElement, onSkin: boolean) {
+  el.addEventListener('dragover', (e) => { if (e.dataTransfer?.types.includes('text/x-color')) e.preventDefault(); });
+  el.addEventListener('drop', (e) => {
+    const hex = colorFromDrop(e);
+    if (!hex) return;
+    e.preventDefault(); e.stopPropagation();
+    setColor(hex);
+    if (onSkin) editor.fillArea();   // soltar sobre la skin = rellenar
+  });
+}
+dropTarget(colorInput, false);
+dropTarget(editorCanvas, true);
+dropTarget(viewer, true);
+dragColor(colorInput, () => editor.color);
+
 // swatches base
 const PALETTE = ['#A97C50', '#5A3A21', '#3A7E7E', '#3A467E', '#2A2A30', '#E8E8E8',
   '#C0392B', '#27AE60', '#F2AF0D', '#F4811F', '#8E44AD', '#000000'];
@@ -652,6 +709,7 @@ for (const hex of PALETTE) {
   s.className = 'swatch';
   s.style.background = hex;
   s.addEventListener('click', () => setColor(hex));
+  dragColor(s, () => hex);
   swatches.appendChild(s);
 }
 
@@ -885,12 +943,9 @@ function setPaintLayer(layer: 'inner' | 'outer') {
   paintLayer = layer;
   document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(r =>
     r.classList.toggle('active', r.dataset.layer === layer));
-  if (layer === 'outer') {
-    outerVisible = true; model.setOuterVisible(true); setEye('outer', true);
-    baseVisible = true; model.setBaseVisible(true); setEye('inner', true);   // interior siempre visible debajo
-  } else {
-    baseVisible = true; model.setBaseVisible(true); setEye('inner', true);
-  }
+  // Elegir capa a pintar solo activa ESA capa; la visibilidad de la otra no se toca.
+  if (layer === 'outer') { outerVisible = true; model.setOuterVisible(true); setEye('outer', true); }
+  else { baseVisible = true; model.setBaseVisible(true); setEye('inner', true); }
   syncPartHud();
 }
 document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(row => {
@@ -979,6 +1034,7 @@ function updateSkinColors() {
     b.style.background = hex;
     b.title = hex;
     b.addEventListener('click', () => setColor(hex));
+    dragColor(b, () => hex);
     skinColorsEl.appendChild(b);
   }
 }
@@ -1150,7 +1206,7 @@ window.addEventListener('drop', (e) => {
     document.body.classList.toggle('views-swapped', swapped);
     // El HUD de partes/capas se mantiene siempre sobre lo que está en el centro.
     if (swapped) canvasWrap.appendChild(partsHud); else viewer.appendChild(partsHud);
-    swapBtn.textContent = swapped ? '⇆ Volver' : '⇆ Centrar 2D';
+    swapBtn.textContent = swapped ? '⇆ Vista 3D' : '⇆ Centrar 2D';
     resize();
   });
 }
@@ -1162,6 +1218,7 @@ applyStevePreset();
 renderLayers();
 updateBlockGuides();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+
 
 
 

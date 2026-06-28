@@ -71,6 +71,8 @@ export class SkinEditor {
   onSelectPart: (x: number, y: number, mode: SelectMode) => void = () => {};  // parte/cara -> main
   // Limita las selecciones por color a los texeles visibles de la capa activa (lo pone main).
   colorRestrict: (() => Uint8Array | null) | null = null;
+  // Mapa de simetría (texel -> su texel espejo) para el relleno con simetría (lo pone main).
+  fillMirror: (() => Int32Array | null) | null = null;
 
   constructor(source: HTMLCanvasElement, display: HTMLCanvasElement) {
     this.source = source;
@@ -167,17 +169,38 @@ export class SkinEditor {
       this.onColorPick(rgbToHex(d[0], d[1], d[2]));
       return;
     }
-    if (this.tool === 'fill') {
-      this.floodFill(x, y);
-      this.onUse(this.color);
-    } else {
-      // shift + clic = línea recta desde el último punto pintado.
-      if (shift && this.lineFrom) this.strokeLine(this.lineFrom, { x, y });
-      else this.stamp(x, y);
-      if (this.tool !== 'eraser') this.onUse(this.color);
-    }
+    if (this.tool === 'fill') { this.fillArea(); return; }   // rellena la selección o toda la skin
+    // shift + clic = línea recta desde el último punto pintado.
+    if (shift && this.lineFrom) this.strokeLine(this.lineFrom, { x, y });
+    else this.stamp(x, y);
+    if (this.tool !== 'eraser') this.onUse(this.color);
     this.onChange();
     this.render();
+  }
+
+  // Bote de pintura: rellena la SELECCIÓN si la hay; si no, toda la skin (capa activa).
+  // Respeta opacidad, modo de fusión y bloqueo de alfa, y aplica simetría si está activa.
+  fillArea() {
+    this.pushUndo();
+    const region = this.hasSelection() ? this.currentMask() : (this.colorRestrict?.() ?? null);
+    const mirror = this.fillMirror?.() ?? null;
+    const tmp = document.createElement('canvas'); tmp.width = tmp.height = TEX;
+    const id = tmp.getContext('2d')!.createImageData(TEX, TEX);
+    const [r, g, b] = hexToRgb(this.color);
+    const set = (k: number) => { const i = k * 4; id.data[i] = r; id.data[i + 1] = g; id.data[i + 2] = b; id.data[i + 3] = 255; };
+    for (let k = 0; k < TEX * TEX; k++) {
+      if (region && !region[k]) continue;
+      set(k);
+      if (mirror) { const m = mirror[k]; if (m >= 0) set(m); }   // simetría: pinta también el espejo
+    }
+    tmp.getContext('2d')!.putImageData(id, 0, 0);
+    const ctx = this.tctx;
+    ctx.save();
+    ctx.globalCompositeOperation = this.lockAlpha ? 'source-atop' : this.brushBlend;
+    ctx.globalAlpha = this.brushOpacity;
+    ctx.drawImage(tmp, 0, 0);
+    ctx.restore();
+    this.onUse(this.color); this.onChange(); this.render();
   }
 
   // Alfa de un píxel del pincel según forma y difuminado. null = fuera de la punta.
@@ -325,38 +348,6 @@ export class SkinEditor {
       if (e2 > -dy) { err -= dy; x0 += sx; }
       if (e2 < dx) { err += dx; y0 += sy; }
     }
-  }
-
-  // Relleno sobre la capa activa (contigüidad con tolerancia, para no dejar motas).
-  private floodFill(x: number, y: number) {
-    const img = this.tctx.getImageData(0, 0, TEX, TEX);
-    const data = img.data;
-    const idx = (px: number, py: number) => (py * TEX + px) * 4;
-    const start = idx(x, y);
-    const tr = data[start], tg = data[start + 1], tb = data[start + 2], ta = data[start + 3];
-    const fill = hexToRgb(this.color);
-    const fa = Math.round(this.brushOpacity * 255);
-    const tol = this.fillTolerance;
-    const matches = (i: number) =>
-      Math.abs(data[i] - tr) + Math.abs(data[i + 1] - tg) +
-      Math.abs(data[i + 2] - tb) + Math.abs(data[i + 3] - ta) <= tol;
-    if (Math.abs(tr - fill[0]) + Math.abs(tg - fill[1]) + Math.abs(tb - fill[2]) + Math.abs(ta - fa) === 0) return;
-
-    const seen = new Uint8Array(TEX * TEX);
-    const stack = [[x, y]];
-    while (stack.length) {
-      const [cx, cy] = stack.pop()!;
-      if (cx < 0 || cy < 0 || cx >= TEX || cy >= TEX) continue;
-      const k = cy * TEX + cx;
-      if (seen[k]) continue;
-      if (!this.inSel(cx, cy)) continue;           // el relleno no sale de la selección
-      const i = idx(cx, cy);
-      if (!matches(i)) continue;
-      seen[k] = 1;
-      data[i] = fill[0]; data[i + 1] = fill[1]; data[i + 2] = fill[2]; data[i + 3] = fa;
-      stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
-    }
-    this.tctx.putImageData(img, 0, 0);
   }
 
   // ¿El píxel está dentro de la selección activa? (sin selección, todo vale)
