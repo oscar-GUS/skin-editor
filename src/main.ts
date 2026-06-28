@@ -1196,7 +1196,7 @@ window.addEventListener('drop', (e) => {
   const swapBtn = document.getElementById('swap-views') as HTMLButtonElement;
   const ed2d = document.querySelector('.editor2d-wrap') as HTMLElement;
   const partsHud = document.getElementById('parts-hud') as HTMLElement;
-  const canvasWrap = document.querySelector('.canvas-wrap') as HTMLElement;
+  const colCenter = document.querySelector('.col-center') as HTMLElement;
   swapBtn.addEventListener('click', () => {
     const vParent = viewer.parentNode!, vNext = viewer.nextSibling;
     const eParent = ed2d.parentNode!, eNext = ed2d.nextSibling;
@@ -1204,8 +1204,8 @@ window.addEventListener('drop', (e) => {
     vParent.insertBefore(ed2d, vNext);
     swapped = !swapped;
     document.body.classList.toggle('views-swapped', swapped);
-    // El HUD de partes/capas se mantiene siempre sobre lo que está en el centro.
-    if (swapped) canvasWrap.appendChild(partsHud); else viewer.appendChild(partsHud);
+    // El HUD de partes/capas se queda en la esquina inferior-izquierda de la columna central.
+    if (swapped) colCenter.appendChild(partsHud); else viewer.appendChild(partsHud);
     swapBtn.textContent = swapped ? '⇆ Vista 3D' : '⇆ Centrar 2D';
     resize();
   });

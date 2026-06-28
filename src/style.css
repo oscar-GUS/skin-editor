@@ -113,6 +113,7 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .col-center {
   padding: 0; gap: 0; overflow: hidden;
   min-height: 0; min-width: 0;
+  position: relative;   /* ancla el HUD de partes en su esquina inferior-izquierda */
 }
 
 .editor2d-wrap { display: flex; flex-direction: column; gap: 10px; }
