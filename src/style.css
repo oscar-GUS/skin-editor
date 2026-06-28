@@ -371,6 +371,7 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
   padding: 10px;
   display: flex;
   justify-content: center;
+  position: relative;   /* ancla el HUD de partes cuando la 2D está centrada */
 }
 #editor {
   width: 100%;

@@ -331,10 +331,14 @@ function selectFromEvent(e: PointerEvent) {
   if (!part) return;
   const faceKey = normalToFace(hit.face.normal);
   const layer: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
-  const bx = Math.floor(hit.uv.x * TEX), by = Math.floor((1 - hit.uv.y) * TEX);
   const mode = editor.selectMode;
-  if (mode === 'color') editor.selectByColor(bx, by);
-  else if (mode === 'colorContiguous') editor.selectContiguous(bx, by);
+  if (mode === 'color' || mode === 'colorContiguous') {
+    // texel de la CAPA activa (remapea a externa) para coger el color correcto, no el interno
+    const p = pixelFromRaycaster(raycaster);
+    if (!p) return;
+    if (mode === 'color') editor.selectByColor(p.x, p.y);
+    else editor.selectContiguous(p.x, p.y);
+  }
   else if (mode === 'face') { const r = part[layer][faceKey]; editor.setSelectionRect(r.x, r.y, r.w, r.h); }
   else { const r = partBBox(part, layer); editor.setSelectionRect(r.x, r.y, r.w, r.h); }   // rect/part → bloque
 }
@@ -377,19 +381,23 @@ function mqUpdate(e: PointerEvent) {
 function mqFinish(e: PointerEvent) {
   marquee.hidden = true;
   const r = renderer.domElement.getBoundingClientRect();
-  const toNdc = (cx: number, cy: number) => ({ x: ((cx - r.left) / r.width) * 2 - 1, y: -((cy - r.top) / r.height) * 2 + 1 });
-  const a = toNdc(mqStart.x, mqStart.y), b = toNdc(e.clientX, e.clientY);
-  if (Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01) { editor.clearSelection(); return; }  // clic = quitar
-  const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x), minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
-  const layer: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
-  const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
+  const x0 = Math.min(mqStart.x, e.clientX), y0 = Math.min(mqStart.y, e.clientY);
+  const x1 = Math.max(mqStart.x, e.clientX), y1 = Math.max(mqStart.y, e.clientY);
+  if (x1 - x0 < 3 && y1 - y0 < 3) { editor.clearSelection(); return; }   // clic simple = quitar
+  // Muestrea el rectángulo de pantalla por raycast: solo coge el texel VISIBLE al
+  // frente bajo cada punto (oclusión resuelta) y de la capa activa (remapeo externa).
+  const w = x1 - x0, h = y1 - y0;
+  const step = Math.max(1, Math.ceil(Math.sqrt((w * h) / 6000)));        // ~6000 muestras máx
   const mask = new Uint8Array(TEX * TEX);
-  const tmp = new THREE.Vector3();
-  model.forEachTexel(layer, (ax, ay, world, normal) => {
-    if (normal.dot(camDir) >= 0) return;            // solo caras que miran a la cámara
-    tmp.copy(world).project(camera);
-    if (tmp.z < 1 && tmp.x >= minX && tmp.x <= maxX && tmp.y >= minY && tmp.y <= maxY) mask[ay * TEX + ax] = 1;
-  });
+  for (let sy = y0; sy <= y1; sy += step) {
+    for (let sx = x0; sx <= x1; sx += step) {
+      ndc.x = ((sx - r.left) / r.width) * 2 - 1;
+      ndc.y = -((sy - r.top) / r.height) * 2 + 1;
+      raycaster.setFromCamera(ndc, camera);
+      const p = pixelFromRaycaster(raycaster);
+      if (p) mask[p.y * TEX + p.x] = 1;
+    }
+  }
   editor.applyMaskSelection(mask);
 }
 
@@ -448,6 +456,24 @@ let pose: PoseName = 'reposo';
 // Visibilidad por parte y por capa, independiente.
 const partVis: Record<string, { base: boolean; outer: boolean }> = {};
 for (const n of ['head', 'body', 'rightArm', 'leftArm', 'rightLeg', 'leftLeg']) partVis[n] = { base: true, outer: true };
+
+// Texeles visibles de la capa activa (partes activadas + capa visible), para limitar
+// la selección por color a lo que de verdad se ve (no a regiones internas/ocultas).
+function buildVisibleLayerMask(): Uint8Array {
+  const m = new Uint8Array(TEX * TEX);
+  const which: 'base' | 'overlay' = paintLayer === 'outer' ? 'overlay' : 'base';
+  for (const part of buildParts(slim)) {
+    const vis = paintLayer === 'outer'
+      ? partVis[part.name].outer && outerVisible
+      : partVis[part.name].base && baseVisible;
+    if (!vis) continue;
+    for (const f of Object.values(part[which]) as Rect[]) {
+      for (let y = f.y; y < f.y + f.h; y++) for (let x = f.x; x < f.x + f.w; x++) m[y * TEX + x] = 1;
+    }
+  }
+  return m;
+}
+editor.colorRestrict = buildVisibleLayerMask;
 
 // atajos: deshacer, copiar/pegar selección, quitar selección
 window.addEventListener('keydown', (e) => {
@@ -1070,8 +1096,9 @@ window.addEventListener('drop', (e) => {
 // ── Redimensionar columnas laterales (arrastre, responsive con centro mínimo) ─
 {
   const layout = document.getElementById('layout')!;
+  // minLeft: que entre en una línea el botón de importar imagen de referencia.
   // minRight: ancho suficiente para que la fila de herramientas no oculte la última.
-  const minLeft = 200, maxLeft = 480, minRight = 300, maxRight = 520, minCenter = 320;
+  const minLeft = 250, maxLeft = 480, minRight = 300, maxRight = 520, minCenter = 320;
   const cssVar = (name: string) => parseFloat(getComputedStyle(layout).getPropertyValue(name));
   const drag = (handle: HTMLElement, side: 'left' | 'right') => {
     handle.addEventListener('pointerdown', (e) => {
@@ -1112,6 +1139,8 @@ window.addEventListener('drop', (e) => {
   let swapped = false;
   const swapBtn = document.getElementById('swap-views') as HTMLButtonElement;
   const ed2d = document.querySelector('.editor2d-wrap') as HTMLElement;
+  const partsHud = document.getElementById('parts-hud') as HTMLElement;
+  const canvasWrap = document.querySelector('.canvas-wrap') as HTMLElement;
   swapBtn.addEventListener('click', () => {
     const vParent = viewer.parentNode!, vNext = viewer.nextSibling;
     const eParent = ed2d.parentNode!, eNext = ed2d.nextSibling;
@@ -1119,6 +1148,8 @@ window.addEventListener('drop', (e) => {
     vParent.insertBefore(ed2d, vNext);
     swapped = !swapped;
     document.body.classList.toggle('views-swapped', swapped);
+    // El HUD de partes/capas se mantiene siempre sobre lo que está en el centro.
+    if (swapped) canvasWrap.appendChild(partsHud); else viewer.appendChild(partsHud);
     swapBtn.textContent = swapped ? '⇆ Volver' : '⇆ Centrar 2D';
     resize();
   });
@@ -1131,6 +1162,7 @@ applyStevePreset();
 renderLayers();
 updateBlockGuides();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+
 
 
 

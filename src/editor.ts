@@ -69,6 +69,8 @@ export class SkinEditor {
   onUse: (hex: string) => void = () => {};   // color aplicado (lápiz/relleno) -> recientes
   onSelectionChange: () => void = () => {};  // la selección ha cambiado (para el 3D)
   onSelectPart: (x: number, y: number, mode: SelectMode) => void = () => {};  // parte/cara -> main
+  // Limita las selecciones por color a los texeles visibles de la capa activa (lo pone main).
+  colorRestrict: (() => Uint8Array | null) | null = null;
 
   constructor(source: HTMLCanvasElement, display: HTMLCanvasElement) {
     this.source = source;
@@ -530,8 +532,10 @@ export class SkinEditor {
     const i0 = (y * TEX + x) * 4;
     if (img[i0 + 3] === 0) { if (this.selOp === 'replace') this.clearSelection(); return; }
     const r = img[i0], g = img[i0 + 1], b = img[i0 + 2];
+    const allow = this.colorRestrict?.() ?? null;   // solo texeles visibles de la capa activa
     const mask = new Uint8Array(TEX * TEX);
     for (let k = 0; k < TEX * TEX; k++) {
+      if (allow && !allow[k]) continue;
       const i = k * 4;
       if (img[i + 3] !== 0 && img[i] === r && img[i + 1] === g && img[i + 2] === b) mask[k] = 1;
     }
@@ -545,6 +549,7 @@ export class SkinEditor {
     const tr = img[i0], tg = img[i0 + 1], tb = img[i0 + 2], ta = img[i0 + 3];
     const mask = new Uint8Array(TEX * TEX);
     const seen = new Uint8Array(TEX * TEX);
+    const allow = this.colorRestrict?.() ?? null;   // no salir de los texeles visibles de la capa
     const stack = [[x, y]];
     const match = (i: number) => Math.abs(img[i] - tr) + Math.abs(img[i + 1] - tg) + Math.abs(img[i + 2] - tb) + Math.abs(img[i + 3] - ta) <= 16;
     while (stack.length) {
@@ -552,6 +557,7 @@ export class SkinEditor {
       if (cx < 0 || cy < 0 || cx >= TEX || cy >= TEX) continue;
       const k = cy * TEX + cx;
       if (seen[k]) continue;
+      if (allow && !allow[k]) continue;
       if (!match(k * 4)) continue;
       seen[k] = 1; mask[k] = 1;
       stack.push([cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]);
