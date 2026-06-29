@@ -169,6 +169,14 @@ const brushCursor = new THREE.Mesh(brushRingGeo, brushRingMat);
 brushCursor.renderOrder = 10;
 brushCursor.visible = false;
 scene.add(brushCursor);
+// Cursor cuadrado (para el pincel cuadrado), mismo tamaño que el grosor.
+const sqGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(-0.5, -0.5, 0), new THREE.Vector3(0.5, -0.5, 0),
+  new THREE.Vector3(0.5, 0.5, 0), new THREE.Vector3(-0.5, 0.5, 0),
+]);
+const brushCursorSq = new THREE.LineLoop(sqGeo, new THREE.LineBasicMaterial({ color: 0xF4811F, depthTest: false }));
+brushCursorSq.renderOrder = 10; brushCursorSq.visible = false; brushCursorSq.frustumCulled = false;
+scene.add(brushCursorSq);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const tmpNormal = new THREE.Vector3();
 
@@ -273,16 +281,20 @@ function hitsSkin(e: PointerEvent): boolean {
 // Coloca el anillo de pincel sobre el punto de la skin, orientado y a tamaño del grosor.
 function updateBrushCursor(e: PointerEvent) {
   const showTool = editor.tool === 'pencil' || editor.tool === 'eraser';
-  if (!showTool) { brushCursor.visible = false; return; }
+  if (!showTool) { brushCursor.visible = false; brushCursorSq.visible = false; return; }
   castFromEvent(e);
-  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.object.visible && h.face);
-  if (!hit || !hit.face) { brushCursor.visible = false; return; }
+  const hit = raycaster.intersectObjects(model.baseMeshes, false).find(h => h.face && partPaintable(h.object));
+  if (!hit || !hit.face) { brushCursor.visible = false; brushCursorSq.visible = false; return; }
   tmpNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld).normalize();
-  brushCursor.position.copy(hit.point).addScaledVector(tmpNormal, 0.1);
-  brushCursor.quaternion.setFromUnitVectors(Z_AXIS, tmpNormal);
   const s = Math.max(1, editor.brushSize);
-  brushCursor.scale.set(s, s, 1);
-  brushCursor.visible = true;
+  // El cursor coincide con la forma del pincel (cuadrado o círculo).
+  const cur = editor.brushShape === 'circle' ? brushCursor : brushCursorSq;
+  const other = editor.brushShape === 'circle' ? brushCursorSq : brushCursor;
+  cur.position.copy(hit.point).addScaledVector(tmpNormal, 0.1);
+  cur.quaternion.setFromUnitVectors(Z_AXIS, tmpNormal);
+  cur.scale.set(s, s, 1);
+  cur.visible = true;
+  other.visible = false;
 }
 
 // Bbox de una capa (base/overlay) de una parte en el atlas.
@@ -383,7 +395,7 @@ function mqFinish(e: PointerEvent) {
   const r = renderer.domElement.getBoundingClientRect();
   const x0 = Math.min(mqStart.x, e.clientX), y0 = Math.min(mqStart.y, e.clientY);
   const x1 = Math.max(mqStart.x, e.clientX), y1 = Math.max(mqStart.y, e.clientY);
-  if (x1 - x0 < 3 && y1 - y0 < 3) { editor.clearSelection(); return; }   // clic simple = quitar
+  if (x1 - x0 < 3 && y1 - y0 < 3) return;   // clic simple sin arrastre = no hace nada (ESC borra)
   // Muestrea el rectángulo de pantalla por raycast: solo coge el texel VISIBLE al
   // frente bajo cada punto (oclusión resuelta) y de la capa activa (remapeo externa).
   const w = x1 - x0, h = y1 - y0;
@@ -412,12 +424,12 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
       const r = renderer.domElement.getBoundingClientRect();
       marquee.style.left = (e.clientX - r.left) + 'px'; marquee.style.top = (e.clientY - r.top) + 'px';
       marquee.style.width = '0px'; marquee.style.height = '0px'; marquee.hidden = false;
+      e.stopImmediatePropagation();
     } else if (hitsSkin(e)) {
       selectFromEvent(e);
-    } else {
-      editor.clearSelection();              // clic fuera de la skin = quitar la selección
+      e.stopImmediatePropagation();
     }
-    e.stopImmediatePropagation();
+    // clic en vacío: no borra (eso es con ESC); deja orbitar/desplazar
     return;
   }
   if (tool === 'gradient') {
@@ -441,13 +453,22 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (gradActive) { const pt = hitPoint(e); if (pt) { gradPtB.copy(pt); setGradLine(gradPtA, gradPtB); } }
   updateBrushCursor(e);
 });
-renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; });
+renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; brushCursorSq.visible = false; });
 window.addEventListener('pointerup', (e) => {
   painting3d = false;
   if (gradActive) { applyGradient3D(); gradActive = false; showGradGuides(false); }
   if (mqActive) { mqFinish(e); mqActive = false; }
 });
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+// Sin menú contextual nativo en el editor (evita "Guardar imagen como…" sobre canvas/iconos).
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// Centrar la skin en la vista (por si se desplazó con el pan y se perdió).
+document.getElementById('center-cam')!.addEventListener('click', () => {
+  controls.target.set(0, 16, 0);
+  camera.position.set(0, 20, 46);
+  controls.update();
+});
 
 // ── UI wiring ────────────────────────────────────────────────────────────────
 // Capa de trabajo: 'inner' (base) pinta el cuerpo y oculta la externa para verla;
@@ -503,13 +524,27 @@ function buildMirrorMap(): Int32Array | null {
 editor.fillMirror = buildMirrorMap;
 
 // atajos: deshacer, copiar/pegar selección, quitar selección
+const TOOL_KEYS: Record<string, Tool> = { b: 'pencil', e: 'eraser', i: 'eyedropper', r: 'fill', d: 'gradient', a: 'select' };
+const SELECT_MODES: SelectMode[] = ['rect', 'colorContiguous', 'color', 'part', 'face'];
 window.addEventListener('keydown', (e) => {
+  // No interceptar mientras se escribe en un campo.
+  const t = e.target as HTMLElement;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
-  if (mod && k === 'z' && !e.shiftKey) { e.preventDefault(); editor.undo(); }
+  if (mod && k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (mod && k === 'c') { e.preventDefault(); editor.copySelection(); }
+  else if (mod && k === 'x') { e.preventDefault(); editor.cutSelection(); }
   else if (mod && k === 'v') { e.preventDefault(); editor.pasteSelection(); }
+  else if (mod) return;                                  // otros Ctrl+ no son atajos nuestros
   else if (k === 'escape') { editor.clearSelection(); }
+  else if (k === 'a' && e.shiftKey) {                    // Shift+A: rota el modo de seleccionar
+    selectTool('select');
+    const i = (SELECT_MODES.indexOf(editor.selectMode) + 1) % SELECT_MODES.length;
+    const btn = document.querySelector<HTMLButtonElement>(`#select-modes button[data-selmode="${SELECT_MODES[i]}"]`);
+    btn?.click();
+  }
+  else if (TOOL_KEYS[k] && !e.shiftKey) { selectTool(TOOL_KEYS[k]); }
 });
 
 // ── Editor de degradado multi-stop (color + posición + opacidad, estilo Photoshop) ──
@@ -815,7 +850,7 @@ function renderLayers() {
     eye.className = 'layer-eye' + (l.visible ? '' : ' off');
     eye.title = l.visible ? 'Ocultar' : 'Mostrar';
     eye.textContent = l.visible ? '👁' : '🚫';
-    eye.addEventListener('click', (ev) => { ev.stopPropagation(); l.visible = !l.visible; renderLayers(); commit(); });
+    eye.addEventListener('click', (ev) => { ev.stopPropagation(); pushHistory(); l.visible = !l.visible; renderLayers(); commit(); });
 
     const name = document.createElement('span');
     name.className = 'layer-name';
@@ -847,13 +882,14 @@ function renderLayers() {
       fillBlendSelect(blendSel, l.blend);
       blendSel.title = 'Modo de fusión de la capa';
       blendSel.addEventListener('click', (ev) => ev.stopPropagation());
-      blendSel.addEventListener('change', () => { l.blend = blendSel.value as GlobalCompositeOperation; commit(); });
+      blendSel.addEventListener('change', () => { pushHistory(); l.blend = blendSel.value as GlobalCompositeOperation; commit(); });
       layersEl.appendChild(blendSel);
     }
   }
 }
 
 function addLayer() {
+  pushHistory();
   const id = nextId++;
   layers.push({ id, name: `Capa ${id}`, canvas: blankCanvas(), visible: true, blend: 'source-over' });
   setActive(id);
@@ -863,6 +899,7 @@ function addLayer() {
 function deleteLayer(id: number) {
   const i = layers.findIndex(l => l.id === id);
   if (i <= 0) return;                       // la base no se borra
+  pushHistory();
   layers.splice(i, 1);
   if (activeId === id) activeId = layers[layers.length - 1].id;
   setActive(activeId);
@@ -873,12 +910,46 @@ function moveLayer(id: number, dir: number) {
   const i = layers.findIndex(l => l.id === id);
   const j = i + dir;
   if (i <= 0 || j <= 0 || j >= layers.length) return;   // la base se queda abajo
+  pushHistory();
   [layers[i], layers[j]] = [layers[j], layers[i]];
   renderLayers();
   commit();
 }
 
 document.getElementById('layer-add')!.addEventListener('click', addLayer);
+
+// ── Historial global (Ctrl+Z): pintura, capas, selección, etc. ───────────────
+interface Snap {
+  layers: { id: number; name: string; visible: boolean; blend: GlobalCompositeOperation; data: ImageData }[];
+  activeId: number; nextId: number; sel: ReturnType<SkinEditor['getSelState']>;
+}
+const history: Snap[] = [];
+const HIST_MAX = 60;
+let restoring = false;
+function snapshot(): Snap {
+  return {
+    layers: layers.map(l => ({ id: l.id, name: l.name, visible: l.visible, blend: l.blend, data: l.canvas.getContext('2d')!.getImageData(0, 0, TEX, TEX) })),
+    activeId, nextId, sel: editor.getSelState(),
+  };
+}
+function pushHistory() { if (restoring) return; history.push(snapshot()); if (history.length > HIST_MAX) history.shift(); }
+function undo() {
+  const s = history.pop();
+  if (!s) return;
+  restoring = true;
+  layers = s.layers.map(ls => {
+    const c = blankCanvas();
+    c.getContext('2d')!.putImageData(ls.data, 0, 0);
+    return { id: ls.id, name: ls.name, canvas: c, visible: ls.visible, blend: ls.blend };
+  });
+  activeId = s.activeId; nextId = s.nextId;
+  editor.setTarget(activeLayer().canvas);
+  editor.setSelState(s.sel);
+  renderLayers();
+  commit();
+  restoring = false;
+}
+editor.onBeforeChange = pushHistory;
 
 // ── Skin base: presets, subir la tuya y resetear ─────────────────────────────
 // Fija la imagen base (limpia para resetear) y la pinta en la capa base.
@@ -1218,6 +1289,7 @@ applyStevePreset();
 renderLayers();
 updateBlockGuides();
 model.setOuterVisible(outerVisible);   // por defecto trabajamos en interna → externa oculta
+
 
 
 

@@ -57,9 +57,6 @@ export class SkinEditor {
   private dragA: { x: number; y: number } | null = null;
   private dragB: { x: number; y: number } | null = null;
 
-  private undoStack: { canvas: HTMLCanvasElement; img: ImageData }[] = [];
-  private undoLimit = 60;
-
   // Marching ants animadas (2D): fase del trazo discontinuo.
   private antPhase = 0;
   private antsRAF = 0;
@@ -69,6 +66,7 @@ export class SkinEditor {
   onUse: (hex: string) => void = () => {};   // color aplicado (lápiz/relleno) -> recientes
   onSelectionChange: () => void = () => {};  // la selección ha cambiado (para el 3D)
   onSelectPart: (x: number, y: number, mode: SelectMode) => void = () => {};  // parte/cara -> main
+  onBeforeChange: () => void = () => {};      // antes de cualquier cambio -> historial global (main)
   // Limita las selecciones por color a los texeles visibles de la capa activa (lo pone main).
   colorRestrict: (() => Uint8Array | null) | null = null;
   // Mapa de simetría (texel -> su texel espejo) para el relleno con simetría (lo pone main).
@@ -138,9 +136,8 @@ export class SkinEditor {
 
   pushUndo() {
     this.strokePainted.clear();                    // empieza un trazo nuevo
+    this.onBeforeChange();                          // guarda estado para el Ctrl+Z global
     const snap = this.tctx.getImageData(0, 0, TEX, TEX);
-    this.undoStack.push({ canvas: this.target, img: snap });
-    if (this.undoStack.length > this.undoLimit) this.undoStack.shift();
     // ¿Trazo con difuminado en modo normal? → activa el buffer de cobertura.
     if (this.tool === 'pencil' && this.feather > 0 && this.brushSize > 1 &&
         this.brushBlend === 'source-over' && !this.lockAlpha) {
@@ -152,12 +149,28 @@ export class SkinEditor {
     }
   }
 
-  undo() {
-    const snap = this.undoStack.pop();
-    if (!snap) return;
-    snap.canvas.getContext('2d')!.putImageData(snap.img, 0, 0);
-    this.onChange();
-    this.render();
+  // Estado de selección para el historial (guardar/restaurar).
+  getSelState(): { selection: { x: number; y: number; w: number; h: number } | null; selMask: Uint8Array | null } {
+    return { selection: this.selection ? { ...this.selection } : null, selMask: this.selMask ? this.selMask.slice() : null };
+  }
+  setSelState(s: { selection: { x: number; y: number; w: number; h: number } | null; selMask: Uint8Array | null }) {
+    this.selection = s.selection ? { ...s.selection } : null;
+    this.selMask = s.selMask ? s.selMask.slice() : null;
+    if (this.hasSelection()) this.startAnts(); else this.stopAnts();
+    this.render(); this.onSelectionChange();
+  }
+
+  // Corta la selección: copia y borra los píxeles seleccionados de la capa activa.
+  cutSelection() {
+    if (!this.hasSelection()) return;
+    this.copySelection();
+    this.onBeforeChange();
+    const img = this.tctx.getImageData(0, 0, TEX, TEX);
+    for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
+      if (this.inSel(x, y)) { const i = (y * TEX + x) * 4; img.data[i + 3] = 0; }
+    }
+    this.tctx.putImageData(img, 0, 0);
+    this.onChange(); this.render();
   }
 
   paintPixel(x: number, y: number, shift = false) {
@@ -429,7 +442,7 @@ export class SkinEditor {
   }
 
   // Selección por máscara desde fuera (p. ej. rectángulo libre proyectado del 3D).
-  applyMaskSelection(mask: Uint8Array) { this.setMask(mask); }
+  applyMaskSelection(mask: Uint8Array) { this.onBeforeChange(); this.setMask(mask); }
 
   // Degradado lineal multi-stop A→B sobre la capa activa (o la selección).
   private applyGradient(a: { x: number; y: number }, b: { x: number; y: number }) {
@@ -473,6 +486,7 @@ export class SkinEditor {
   }
 
   private setSelectionFromDrag(a: { x: number; y: number }, b: { x: number; y: number }) {
+    this.onBeforeChange();
     const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
     const w = Math.abs(b.x - a.x) + 1, h = Math.abs(b.y - a.y) + 1;
     if (this.selOp === 'replace') {
@@ -484,10 +498,12 @@ export class SkinEditor {
     }
   }
 
-  clearSelection() { this.selection = null; this.selMask = null; this.stopAnts(); this.render(); this.onSelectionChange(); }
+  private resetSelection() { this.selection = null; this.selMask = null; this.stopAnts(); this.render(); this.onSelectionChange(); }
+  clearSelection() { this.onBeforeChange(); this.resetSelection(); }
 
   // Fija la selección a un rectángulo concreto (parte/cara, desde 2D o 3D).
   setSelectionRect(x: number, y: number, w: number, h: number) {
+    this.onBeforeChange();
     x = Math.round(x); y = Math.round(y); w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
     if (this.selOp === 'replace') {
       this.selMask = null;
@@ -511,7 +527,7 @@ export class SkinEditor {
     for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
       if (mask[y * TEX + x]) { any = true; minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
     }
-    if (!any) { this.clearSelection(); return; }
+    if (!any) { this.resetSelection(); return; }
     this.selMask = mask;
     this.selection = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
     this.commitSelection();
@@ -519,22 +535,25 @@ export class SkinEditor {
 
   // Todos los píxeles del compuesto con exactamente el mismo color.
   selectByColor(x: number, y: number) {
+    this.onBeforeChange();
     const img = this.sctx.getImageData(0, 0, TEX, TEX).data;
     const i0 = (y * TEX + x) * 4;
-    if (img[i0 + 3] === 0) { if (this.selOp === 'replace') this.clearSelection(); return; }
+    if (img[i0 + 3] === 0) { if (this.selOp === 'replace') this.resetSelection(); return; }
     const r = img[i0], g = img[i0 + 1], b = img[i0 + 2];
     const allow = this.colorRestrict?.() ?? null;   // solo texeles visibles de la capa activa
+    const tol = 12;                                  // tolerancia: coge variaciones imperceptibles
     const mask = new Uint8Array(TEX * TEX);
     for (let k = 0; k < TEX * TEX; k++) {
       if (allow && !allow[k]) continue;
       const i = k * 4;
-      if (img[i + 3] !== 0 && img[i] === r && img[i + 1] === g && img[i + 2] === b) mask[k] = 1;
+      if (img[i + 3] !== 0 && Math.abs(img[i] - r) + Math.abs(img[i + 1] - g) + Math.abs(img[i + 2] - b) <= tol) mask[k] = 1;
     }
     this.setMask(mask);
   }
 
   // Zona contigua del mismo color (flood) en el compuesto.
   selectContiguous(x: number, y: number) {
+    this.onBeforeChange();
     const img = this.sctx.getImageData(0, 0, TEX, TEX).data;
     const i0 = (y * TEX + x) * 4;
     const tr = img[i0], tg = img[i0 + 1], tb = img[i0 + 2], ta = img[i0 + 3];

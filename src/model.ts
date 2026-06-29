@@ -109,11 +109,10 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   });
   // Capa externa: doble cara (se ve la textura por delante y por detrás de cada píxel),
   // alpha-test alto para bordes nítidos y depthWrite para no ver líneas a través.
-  // Capa externa como "aura": shell translúcido para diferenciarla de la interna
-  // sólida (la rellena). alphaTest bajo + opacidad < 1 → se ve como un halo encima.
+  // Capa externa: SÓLIDA (lo pintado se ve opaco, no transparente), doble cara.
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
-    transparent: true, opacity: 0.55, alphaTest: 0.1, side: THREE.DoubleSide, depthWrite: false,
+    transparent: true, opacity: 1, alphaTest: 0.5, side: THREE.DoubleSide, depthWrite: true,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
   // Material para caras de la capa exterior SIN contenido: no dibuja nada.
