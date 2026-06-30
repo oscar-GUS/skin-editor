@@ -537,7 +537,8 @@ window.addEventListener('keydown', (e) => {
   else if (mod && k === 'x') { e.preventDefault(); editor.cutSelection(); }
   else if (mod && k === 'v') { e.preventDefault(); editor.pasteSelection(); }
   else if (mod) return;                                  // otros Ctrl+ no son atajos nuestros
-  else if (k === 'escape') { editor.clearSelection(); }
+  else if (k === 'enter' && editor.isFloating()) { e.preventDefault(); editor.commitPaste(); }
+  else if (k === 'escape') { if (editor.isFloating()) editor.cancelPaste(); else editor.clearSelection(); }
   else if (k === 'a' && e.shiftKey) {                    // Shift+A: rota el modo de seleccionar
     selectTool('select');
     const i = (SELECT_MODES.indexOf(editor.selectMode) + 1) % SELECT_MODES.length;
@@ -658,8 +659,19 @@ document.querySelectorAll<HTMLButtonElement>('#select-modes button').forEach(btn
   });
 });
 document.getElementById('sel-copy')!.addEventListener('click', () => editor.copySelection());
-document.getElementById('sel-paste')!.addEventListener('click', () => editor.pasteSelection());
+document.getElementById('sel-paste')!.addEventListener('click', () => editor.isFloating() ? editor.commitPaste() : editor.pasteSelection());
 document.getElementById('sel-clear')!.addEventListener('click', () => editor.clearSelection());
+
+// El pegado se confirma en una CAPA NUEVA, en la posición donde se haya soltado.
+editor.onPasteCommit = (img, x, y) => {
+  pushHistory();
+  const id = nextId++;
+  const c = blankCanvas();
+  c.getContext('2d')!.putImageData(img, x, y);
+  layers.push({ id, name: `Pegado ${id}`, canvas: c, visible: true, blend: 'source-over' });
+  setActive(id);
+  commit();
+};
 
 // ── Colores recientes (10 slots; el último usado primero) ────────────────────
 const RECENTS_MAX = 10;
@@ -701,7 +713,10 @@ function setColor(hex: string, recent = true) {
   colorInput.value = hex;
   if (recent) addRecent(hex);
 }
-colorInput.addEventListener('input', () => setColor(colorInput.value));
+// `input` se dispara en cada movimiento dentro del selector nativo: actualiza el
+// color en vivo pero SIN tocar recientes. Solo al confirmar (`change`) se añade.
+colorInput.addEventListener('input', () => setColor(colorInput.value, false));
+colorInput.addEventListener('change', () => addRecent(colorInput.value));
 // Cuentagotas (2D / 3D): toma el color y pasa directo a pincel para pintar.
 editor.onColorPick = (hex) => { setColor(hex); selectTool('pencil'); };
 editor.onUse = (hex) => addRecent(hex);         // lápiz / relleno

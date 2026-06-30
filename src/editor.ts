@@ -51,6 +51,9 @@ export class SkinEditor {
   private selMask: Uint8Array | null = null;
   selOp: 'replace' | 'add' | 'subtract' = 'replace';   // shift=sumar, ctrl=restar
   private clipboard: ImageData | null = null;
+  // Pegado flotante: se posiciona arrastrando antes de confirmar (Enter / clic fuera).
+  private floating: { img: ImageData; canvas: HTMLCanvasElement; x: number; y: number } | null = null;
+  private floatGrab: { dx: number; dy: number } | null = null;
 
   // Cursor (para previsualizar el grosor) y arrastre (degradado/selección)
   private hover: { x: number; y: number } | null = null;
@@ -66,6 +69,8 @@ export class SkinEditor {
   onUse: (hex: string) => void = () => {};   // color aplicado (lápiz/relleno) -> recientes
   onSelectionChange: () => void = () => {};  // la selección ha cambiado (para el 3D)
   onSelectPart: (x: number, y: number, mode: SelectMode) => void = () => {};  // parte/cara -> main
+  // Confirmar pegado: main lo vuelca en una CAPA NUEVA en la posición elegida.
+  onPasteCommit: ((img: ImageData, x: number, y: number) => void) | null = null;
   onBeforeChange: () => void = () => {};      // antes de cualquier cambio -> historial global (main)
   // Limita las selecciones por color a los texeles visibles de la capa activa (lo pone main).
   colorRestrict: (() => Uint8Array | null) | null = null;
@@ -93,6 +98,14 @@ export class SkinEditor {
 
     display.addEventListener('pointerdown', (e) => {
       const p = toTex(e);
+      // Pegado flotante: arrastrar dentro = mover · clic fuera = confirmar posición.
+      if (this.floating) {
+        const f = this.floating;
+        const inside = p.x >= f.x && p.x < f.x + f.img.width && p.y >= f.y && p.y < f.y + f.img.height;
+        if (inside) { this.floatGrab = { dx: p.x - f.x, dy: p.y - f.y }; display.setPointerCapture(e.pointerId); }
+        else this.commitPaste();
+        return;
+      }
       display.setPointerCapture(e.pointerId);
       if (this.tool === 'select') {
         // shift = sumar zona · ctrl/cmd = restar · sin modificador = reemplazar
@@ -111,6 +124,13 @@ export class SkinEditor {
     display.addEventListener('pointermove', (e) => {
       const p = toTex(e);
       this.hover = p;
+      if (this.floating && this.floatGrab) {
+        const f = this.floating;
+        f.x = Math.max(0, Math.min(TEX - f.img.width, p.x - this.floatGrab.dx));
+        f.y = Math.max(0, Math.min(TEX - f.img.height, p.y - this.floatGrab.dy));
+        this.render();
+        return;
+      }
       if (painting) this.paintPixel(p.x, p.y);
       else if (dragging) { this.dragB = p; this.render(); }
       else this.render();   // previsualizar el grosor del pincel
@@ -122,7 +142,10 @@ export class SkinEditor {
       }
       dragging = false; this.dragA = null; this.dragB = null;
     };
-    display.addEventListener('pointerup', () => { painting = false; finishDrag(); });
+    display.addEventListener('pointerup', () => {
+      if (this.floating) { this.floatGrab = null; return; }
+      painting = false; finishDrag();
+    });
     display.addEventListener('pointerleave', () => { painting = false; this.hover = null; finishDrag(); this.render(); });
 
     this.render();
@@ -538,11 +561,19 @@ export class SkinEditor {
     this.onBeforeChange();
     const img = this.sctx.getImageData(0, 0, TEX, TEX).data;
     const i0 = (y * TEX + x) * 4;
-    if (img[i0 + 3] === 0) { if (this.selOp === 'replace') this.resetSelection(); return; }
-    const r = img[i0], g = img[i0 + 1], b = img[i0 + 2];
-    const allow = this.colorRestrict?.() ?? null;   // solo texeles visibles de la capa activa
-    const tol = 12;                                  // tolerancia: coge variaciones imperceptibles
+    const allow = this.colorRestrict?.() ?? null;   // región de la capa activa visible
     const mask = new Uint8Array(TEX * TEX);
+    // La transparencia cuenta como un color: clic en vacío → todos los texeles vacíos.
+    if (img[i0 + 3] === 0) {
+      for (let k = 0; k < TEX * TEX; k++) {
+        if (allow && !allow[k]) continue;
+        if (img[k * 4 + 3] === 0) mask[k] = 1;
+      }
+      this.setMask(mask);
+      return;
+    }
+    const r = img[i0], g = img[i0 + 1], b = img[i0 + 2];
+    const tol = 12;                                  // tolerancia: coge variaciones imperceptibles
     for (let k = 0; k < TEX * TEX; k++) {
       if (allow && !allow[k]) continue;
       const i = k * 4;
@@ -582,13 +613,42 @@ export class SkinEditor {
     this.clipboard = this.tctx.getImageData(s.x, s.y, s.w, s.h);
   }
 
-  // Pega el portapapeles en el origen de la selección actual (o en 0,0).
+  isFloating(): boolean { return !!this.floating; }
+
+  // Inicia un pegado FLOTANTE: el contenido aparece sobre la skin y se reposiciona
+  // arrastrándolo; se confirma con Enter / clic fuera, o se cancela con Escape.
   pasteSelection() {
     if (!this.clipboard) return;
+    if (this.floating) this.commitPaste();
+    const img = this.clipboard;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width; canvas.height = img.height;
+    canvas.getContext('2d')!.putImageData(img, 0, 0);
     const s = this.selection;
-    this.pushUndo();
-    this.tctx.putImageData(this.clipboard, s ? s.x : 0, s ? s.y : 0);
-    this.onChange(); this.render();
+    const x = Math.max(0, Math.min(TEX - img.width,  s ? s.x : Math.floor((TEX - img.width) / 2)));
+    const y = Math.max(0, Math.min(TEX - img.height, s ? s.y : Math.floor((TEX - img.height) / 2)));
+    this.floating = { img, canvas, x, y };
+    this.startAnts();
+    this.render();
+  }
+
+  // Confirma el pegado: lo vuelca en una capa nueva (si main lo gestiona) o en la
+  // capa activa, en la posición actual del flotante.
+  commitPaste() {
+    if (!this.floating) return;
+    const f = this.floating;
+    this.floating = null; this.floatGrab = null;
+    if (this.onPasteCommit) this.onPasteCommit(f.img, f.x, f.y);
+    else { this.pushUndo(); this.tctx.putImageData(f.img, f.x, f.y); this.onChange(); }
+    if (!this.hasSelection()) this.stopAnts();
+    this.render();
+  }
+
+  cancelPaste() {
+    if (!this.floating) return;
+    this.floating = null; this.floatGrab = null;
+    if (!this.hasSelection()) this.stopAnts();
+    this.render();
   }
 
   // Pinta SOLO el borde de la selección (naranja) en un contexto 64×64, para el 3D:
@@ -608,10 +668,10 @@ export class SkinEditor {
 
   // ── Marching ants (2D) ───────────────────────────────────────────────────────
   private startAnts() {
-    if (!this.hasSelection()) { this.stopAnts(); return; }
+    if (!this.hasSelection() && !this.floating) { this.stopAnts(); return; }
     if (this.antsRAF) return;
     const tick = () => {
-      if (!this.hasSelection()) { this.antsRAF = 0; return; }
+      if (!this.hasSelection() && !this.floating) { this.antsRAF = 0; return; }
       this.antPhase = (this.antPhase + 0.6) % 7;
       this.render();
       this.antsRAF = requestAnimationFrame(tick);
@@ -680,6 +740,18 @@ export class SkinEditor {
     }
 
     if (this.hasSelection()) this.strokeSelection(ctx, s);
+
+    // ── Pegado flotante: contenido + borde animado en la posición actual ─────
+    if (this.floating) {
+      const f = this.floating;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(f.canvas, f.x * s, f.y * s, f.img.width * s, f.img.height * s);
+      ctx.save();
+      ctx.setLineDash([4, 3]); ctx.lineDashOffset = -this.antPhase;
+      ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(244,129,31,0.95)';
+      ctx.strokeRect(f.x * s + 0.5, f.y * s + 0.5, f.img.width * s - 1, f.img.height * s - 1);
+      ctx.restore();
+    }
 
     // ── Arrastre en curso (degradado: línea A→B · selección: rectángulo) ─────
     if (this.dragA && this.dragB) {
