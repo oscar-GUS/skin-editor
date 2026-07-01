@@ -110,6 +110,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const baseMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
+    // Empuja la base ligeramente ATRÁS en profundidad: donde base y externa se
+    // solapan, siempre gana la externa (la de delante), sin z-fighting.
+    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
   });
   // Capa externa: OPACA con recorte alfa (alphaTest), NO 'transparent'. Al ser opaca
   // se dibuja en el pase sólido con z-buffer normal: la cara de delante siempre gana

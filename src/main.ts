@@ -86,7 +86,10 @@ editor.onSelectionChange = syncSelection;
 // ── 3D scene ─────────────────────────────────────────────────────────────────
 const viewer = document.getElementById('viewer')!;
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+// near/far ajustados al tamaño del modelo (se ve a ~24-90u): un ratio far/near
+// pequeño da mucha más precisión de z-buffer y evita el z-fighting entre la capa
+// base y la externa (que solo están 0.5u separadas).
+const camera = new THREE.PerspectiveCamera(45, 1, 1, 300);
 camera.position.set(0, 20, 46);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
