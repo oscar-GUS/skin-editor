@@ -38,7 +38,10 @@ const POSES: Record<PoseName, Partial<Record<string, [number, number, number]>>>
 
 // Articulación (hombro/cadera) de cada miembro, en coords de modelo.
 function jointFor(name: string, pos: [number, number, number]): [number, number, number] | null {
-  if (name === 'rightArm' || name === 'leftArm') return [pos[0], 24, 0]; // hombro
+  // Hombro JUNTO al torso (x=±5, borde del cuerpo ±4) y algo bajo el tope (y=22),
+  // no en el centro del brazo: así al rotar en Z (saludar / T-pose) el brazo pivota
+  // desde el hombro y sigue pegado al cuerpo en vez de orbitar su propio centro.
+  if (name === 'rightArm' || name === 'leftArm') return [Math.sign(pos[0]) * 5, 22, 0];
   if (name === 'rightLeg' || name === 'leftLeg') return [pos[0], 12, 0]; // cadera
   return null;
 }
