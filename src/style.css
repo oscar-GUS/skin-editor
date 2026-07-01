@@ -299,6 +299,7 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
   border: 1px solid rgba(244,129,31,0.4); border-radius: var(--radius-sm);
 }
 .mini-btn:hover { background: rgba(244,129,31,0.18); border-color: var(--accent); }
+.layer-tools { display: flex; align-items: center; gap: 4px; }
 .layers-wrap { display: flex; flex-direction: column; gap: 6px; }
 .layers { display: flex; flex-direction: column; gap: 4px; }
 .layer-row {

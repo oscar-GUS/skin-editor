@@ -61,6 +61,9 @@ function recomposite() {
     ctx.drawImage(l.canvas, 0, 0);
   }
   ctx.globalCompositeOperation = 'source-over';
+  // Flotante en curso (mover/pegar) encima de todo → se ve en vivo en el 3D.
+  const fo = editor.getFloatingOverlay();
+  if (fo) ctx.drawImage(fo.canvas, fo.x, fo.y);
 }
 
 // Tras cualquier cambio en capas/pintura: recompone, sube a 3D y refresca UI.
@@ -551,6 +554,7 @@ window.addEventListener('keydown', (e) => {
   else if (mod) return;                                  // otros Ctrl+ no son atajos nuestros
   else if (k === 'enter' && editor.isFloating()) { e.preventDefault(); editor.commitPaste(); }
   else if (k === 'escape') { if (editor.isFloating()) editor.cancelPaste(); else editor.clearSelection(); }
+  else if (k === 'delete' || k === 'supr') { e.preventDefault(); if (!editor.isFloating()) deleteLayer(activeId); }
   else if (k === 'a' && e.shiftKey) {                    // Shift+A: rota el modo de seleccionar
     selectTool('select');
     const i = (SELECT_MODES.indexOf(editor.selectMode) + 1) % SELECT_MODES.length;
@@ -650,7 +654,14 @@ function updateToolUI(tool: Tool) {
   showEl('row-blend', tool === 'pencil' || tool === 'fill');
   showEl('row-toggles', brush || tool === 'fill');   // relleno: bloquear alfa + simetría
   showEl('grad-panel', tool === 'gradient');
-  showEl('select-panel', tool === 'select');
+  // El panel de selección (con copiar/cortar/pegar) también en MOVER; los modos de
+  // selección solo aplican a la herramienta seleccionar.
+  showEl('select-panel', tool === 'select' || tool === 'move');
+  showEl('select-modes', tool === 'select');
+  const hint = document.getElementById('select-hint');
+  if (hint) hint.innerHTML = tool === 'move'
+    ? 'Arrastra la selección (2D o 3D) para moverla. Se suelta en una <strong>capa nueva</strong>. <strong>Ctrl+C/X/V</strong>.'
+    : 'Marca una zona para limitar dónde pintas (2D y 3D). <strong>Shift</strong> suma · <strong>Ctrl</strong> resta.';
   // El panel de colores solo aparece con herramientas que usan color; borrar,
   // seleccionar y mover no lo necesitan.
   showEl('colors-panel', tool === 'pencil' || tool === 'fill' || tool === 'gradient' || tool === 'eyedropper');
@@ -674,6 +685,7 @@ document.querySelectorAll<HTMLButtonElement>('#select-modes button').forEach(btn
   });
 });
 document.getElementById('sel-copy')!.addEventListener('click', () => editor.copySelection());
+document.getElementById('sel-cut')!.addEventListener('click', () => editor.cutSelection());
 document.getElementById('sel-paste')!.addEventListener('click', () => editor.isFloating() ? editor.commitPaste() : editor.pasteSelection());
 document.getElementById('sel-clear')!.addEventListener('click', () => editor.clearSelection());
 
@@ -684,6 +696,17 @@ editor.onPasteCommit = (img, x, y) => {
   const c = blankCanvas();
   c.getContext('2d')!.putImageData(img, x, y);
   layers.push({ id, name: `Pegado ${id}`, canvas: c, visible: true, blend: 'source-over' });
+  setActive(id);
+  commit();
+};
+
+// Al soltar un MOVIMIENTO: cae en una capa nueva (no destructivo; conserva lo de debajo).
+editor.onMoveCommit = (img, x, y) => {
+  pushHistory();
+  const id = nextId++;
+  const c = blankCanvas();
+  c.getContext('2d')!.putImageData(img, x, y);
+  layers.push({ id, name: `Movido ${id}`, canvas: c, visible: true, blend: 'source-over' });
   setActive(id);
   commit();
 };
@@ -946,7 +969,41 @@ function moveLayer(id: number, dir: number) {
   commit();
 }
 
+// Duplica una capa (copia su lienzo) justo encima, y la activa.
+function duplicateLayer(id: number) {
+  const i = layers.findIndex(l => l.id === id);
+  if (i < 0) return;
+  pushHistory();
+  const src = layers[i];
+  const c = blankCanvas();
+  c.getContext('2d')!.drawImage(src.canvas, 0, 0);
+  const nid = nextId++;
+  layers.splice(i + 1, 0, { id: nid, name: `${src.name} copia`, canvas: c, visible: true, blend: src.blend });
+  setActive(nid);
+  commit();
+}
+
+// Fusiona una capa con la de DEBAJO (respetando su modo de fusión) y la elimina.
+function mergeLayerDown(id: number) {
+  const i = layers.findIndex(l => l.id === id);
+  if (i <= 0) return;                       // la base no tiene capa debajo
+  pushHistory();
+  const upper = layers[i], lower = layers[i - 1];
+  if (upper.visible) {
+    const ctx = lower.canvas.getContext('2d')!;
+    ctx.save();
+    ctx.globalCompositeOperation = upper.blend;
+    ctx.drawImage(upper.canvas, 0, 0);
+    ctx.restore();
+  }
+  layers.splice(i, 1);
+  setActive(lower.id);
+  commit();
+}
+
 document.getElementById('layer-add')!.addEventListener('click', addLayer);
+document.getElementById('layer-dup')!.addEventListener('click', () => duplicateLayer(activeId));
+document.getElementById('layer-merge')!.addEventListener('click', () => mergeLayerDown(activeId));
 
 // ── Historial global (Ctrl+Z): pintura, capas, selección, etc. ───────────────
 interface Snap {

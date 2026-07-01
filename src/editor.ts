@@ -75,7 +75,9 @@ export class SkinEditor {
   onSelectionChange: () => void = () => {};  // la selección ha cambiado (para el 3D)
   onSelectPart: (x: number, y: number, mode: SelectMode) => void = () => {};  // parte/cara -> main
   // Confirmar pegado: main lo vuelca en una CAPA NUEVA en la posición elegida.
-  onPasteCommit: ((img: ImageData, x: number, y: number) => void) | null = null;
+  onPasteCommit: ((img: ImageData, x: number, y: number) => void) | null = null
+  // Confirmar movimiento: main lo vuelca en una CAPA NUEVA (no destructivo) en destino.
+  onMoveCommit: ((img: ImageData, x: number, y: number) => void) | null = null;
   onBeforeChange: () => void = () => {};      // antes de cualquier cambio -> historial global (main)
   // Limita las selecciones por color a los texeles visibles de la capa activa (lo pone main).
   colorRestrict: (() => Uint8Array | null) | null = null;
@@ -640,6 +642,7 @@ export class SkinEditor {
     const y = Math.max(0, Math.min(TEX - img.height, s ? s.y : Math.floor((TEX - img.height) / 2)));
     this.floating = { img, canvas, x, y };
     this.startAnts();
+    this.onChange();   // muestra el pegado en vivo (2D y 3D) antes de confirmar
     this.render();
   }
 
@@ -659,6 +662,7 @@ export class SkinEditor {
     if (!this.floating) return;
     this.floating = null; this.floatGrab = null; this.floatingIsMove = false;
     if (!this.hasSelection()) this.stopAnts();
+    this.onChange();   // recompone sin el flotante (quita el overlay del 3D)
     this.render();
   }
 
@@ -714,7 +718,16 @@ export class SkinEditor {
         this.onSelectionChange();   // refresca el contorno de preview (2D y 3D)
       }
     }
+    // Recompone el compuesto con el flotante encima → se ve en VIVO en el 3D mientras
+    // se arrastra, no solo al soltar. (onChange también llama a render()).
+    this.onChange();
     this.render();
+  }
+
+  // El flotante activo (mover o pegar) para que main lo pinte encima del compuesto
+  // y así verlo en vivo también en el 3D durante el arrastre.
+  getFloatingOverlay(): { canvas: HTMLCanvasElement; x: number; y: number } | null {
+    return this.floating ? { canvas: this.floating.canvas, x: this.floating.x, y: this.floating.y } : null;
   }
 
   // Vuelca el flotante de movimiento sobre la MISMA capa (composición normal, solo
@@ -723,7 +736,10 @@ export class SkinEditor {
     if (!this.floating) return;
     const f = this.floating;
     this.floating = null; this.floatGrab = null; this.floatingIsMove = false;
-    this.tctx.drawImage(f.canvas, f.x, f.y);
+    // Se suelta en una CAPA NUEVA (no destructivo): no borra la textura que haya
+    // debajo en el destino. Si main no lo gestiona, cae a la capa activa.
+    if (this.onMoveCommit) this.onMoveCommit(f.img, f.x, f.y);
+    else this.tctx.drawImage(f.canvas, f.x, f.y);
     this.onChange();
     this.commitSelection();
   }
