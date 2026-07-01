@@ -316,6 +316,7 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .layer-eye.off { opacity: 0.45; }
 .layer-name { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.layer-rename { flex: 1; min-width: 0; font-size: 13px; color: var(--text); background: #0d0d0f; border: 1px solid var(--accent); border-radius: var(--radius-sm); padding: 1px 5px; outline: none; }
 .layer-mini {
   padding: 0; width: 22px; height: 22px; font-size: 11px; flex-shrink: 0;
   background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text-sec);

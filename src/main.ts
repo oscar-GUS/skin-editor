@@ -960,6 +960,29 @@ function renderLayers() {
     const name = document.createElement('span');
     name.className = 'layer-name';
     name.textContent = l.name;
+    name.title = 'Doble clic para renombrar';
+    // Renombrar: doble clic → campo editable. Enter/blur confirma, Escape cancela.
+    name.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      const inp = document.createElement('input');
+      inp.className = 'layer-rename';
+      inp.value = l.name;
+      inp.addEventListener('click', e => e.stopPropagation());
+      let done = false;
+      const commitName = (save: boolean) => {
+        if (done) return; done = true;
+        if (save) { const v = inp.value.trim(); if (v) { pushHistory(); l.name = v; } }
+        renderLayers();
+      };
+      inp.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); commitName(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); commitName(false); }
+      });
+      inp.addEventListener('blur', () => commitName(true));
+      name.replaceWith(inp);
+      inp.focus(); inp.select();
+    });
 
     const up = document.createElement('button');
     up.className = 'layer-mini'; up.textContent = '▲'; up.title = 'Subir';
