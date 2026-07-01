@@ -110,9 +110,6 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const baseMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
-    // Empuja la base ligeramente ATRÁS en profundidad: donde base y externa se
-    // solapan, siempre gana la externa (la de delante), sin z-fighting.
-    polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
   });
   // Capa externa: OPACA con recorte alfa (alphaTest), NO 'transparent'. Al ser opaca
   // se dibuja en el pase sólido con z-buffer normal: la cara de delante siempre gana
@@ -122,6 +119,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
+    // Calcomanía: misma geometría que la base pero renderizada por delante, para que
+    // la textura de delante SIEMPRE gane (sin z-fighting con la base ni entre partes).
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
   // Material para caras de la capa exterior SIN contenido: no dibuja nada.
   const hiddenMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
@@ -158,7 +158,11 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     baseMeshes.push(baseMesh);
     disposables.push(baseGeo);
 
-    const outerGeo = new THREE.BoxGeometry(w + 1, h + 1, d + 1);
+    // Capa externa del MISMO tamaño que la base (no inflada): así las externas de
+    // partes adyacentes (torso/brazos/casco) encajan como las bases y NO se cruzan
+    // en las costuras (lo que causaba el tramado de z-fighting). Se pone delante con
+    // polygonOffset (estilo calcomanía), no con tamaño.
+    const outerGeo = new THREE.BoxGeometry(w, h, d);
     applyUV(outerGeo, part.overlay);
     // Material por cara (6 grupos del box, en orden FACE_ORDER) para poder ocultar
     // individualmente las caras de la capa exterior que no tengan contenido.
@@ -175,7 +179,7 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     container.add(gridMesh);
     disposables.push(gridGeo);
 
-    const gridOuterGeo = new THREE.BoxGeometry(w + 1.08, h + 1.08, d + 1.08);
+    const gridOuterGeo = new THREE.BoxGeometry(w + 0.12, h + 0.12, d + 0.12);
     applyUV(gridOuterGeo, part.overlay);
     const gridOuterMesh = new THREE.Mesh(gridOuterGeo, gridMat);
     gridOuterMesh.position.set(...local); gridOuterMesh.visible = false; gridOuterMesh.renderOrder = 2;
