@@ -93,7 +93,7 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const pivots: Record<string, THREE.Group> = {};
   const reg: Record<string, {
     base: THREE.Mesh; outer: THREE.Mesh; grid: THREE.Mesh; gridOuter: THREE.Mesh;
-    selLines: THREE.LineSegments; outerLines: THREE.LineSegments;
+    selLines: THREE.LineSegments;
     baseGeo: THREE.BoxGeometry; outerGeo: THREE.BoxGeometry;
     part: PartSpec; overlay: Faces;
   }> = {};
@@ -108,12 +108,14 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
   });
-  // Capa externa: doble cara (se ve la textura por delante y por detrás de cada píxel),
-  // alpha-test alto para bordes nítidos y depthWrite para no ver líneas a través.
-  // Capa externa: SÓLIDA (lo pintado se ve opaco, no transparente), doble cara.
+  // Capa externa: OPACA con recorte alfa (alphaTest), NO 'transparent'. Al ser opaca
+  // se dibuja en el pase sólido con z-buffer normal: la cara de delante siempre gana
+  // a la de detrás (sin mezcla ni interpolación entre dos texturas superpuestas).
+  // Doble cara para que las partes finas se vean por ambos lados; el alphaTest recorta
+  // los texeles borrados dejando hueco real.
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
-    transparent: true, opacity: 1, alphaTest: 0.5, side: THREE.DoubleSide, depthWrite: true,
+    alphaTest: 0.5, side: THREE.DoubleSide,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
   // Material para caras de la capa exterior SIN contenido: no dibuja nada.
@@ -124,10 +126,7 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   // Selección: contorno con LÍNEAS finas (no relleno), del grosor de un trazo,
   // visible a través del modelo para apreciarse en todas las caras.
   const selMat = new THREE.LineBasicMaterial({ color: 0xF4811F, transparent: true, depthTest: false });
-  // Capa externa como CONTORNO (no relleno): silueta del contenido del overlay, para
-  // distinguir a simple vista en qué capa se está trabajando (interna = sólida).
-  const outerLineMat = new THREE.LineBasicMaterial({ color: 0xCFE4F2, transparent: true, opacity: 0.85 });
-  disposables.push(baseMat, outerMat, hiddenMat, gridMat, selMat, outerLineMat);
+  disposables.push(baseMat, outerMat, hiddenMat, gridMat, selMat);
 
   for (const part of buildParts(slim)) {
     const [w, h, d] = part.size;
@@ -186,17 +185,9 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     container.add(selLines);
     disposables.push(selGeo);
 
-    // Contorno de la capa externa (silueta del contenido del overlay).
-    const outerLineGeo = new THREE.BufferGeometry();
-    const outerLines = new THREE.LineSegments(outerLineGeo, outerLineMat);
-    outerLines.position.set(...local); outerLines.visible = false; outerLines.renderOrder = 3;
-    outerLines.frustumCulled = false;
-    container.add(outerLines);
-    disposables.push(outerLineGeo);
-
     reg[part.name] = {
       base: baseMesh, outer: outerMesh, grid: gridMesh, gridOuter: gridOuterMesh,
-      selLines, outerLines, baseGeo, outerGeo, part: part as PartSpec, overlay: part.overlay,
+      selLines, baseGeo, outerGeo, part: part as PartSpec, overlay: part.overlay,
     };
     partBaseVisible[part.name] = true;
     partOuterVisible[part.name] = true;
@@ -220,54 +211,23 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   function refreshOuter() {
     const img = srcCtx.getImageData(0, 0, TEX, TEX);
     for (const name in reg) {
-      const { outer, outerLines, gridOuter, overlay } = reg[name];
+      const { outer, gridOuter, overlay } = reg[name];
+      const mats = outer.material as THREE.Material[];
       let alguna = false;
-      FACE_ORDER.forEach((k) => { if (rectHasContent(img, overlay[k])) alguna = true; });
-      // La capa externa NO se rellena: se muestra solo su contorno (silueta).
-      outer.visible = false;
-      outerLines.visible = partOuterVisible[name] && outerVisible && alguna;
+      // Cada cara del overlay se rellena con su textura (outerMat) o se oculta
+      // (hiddenMat) si no tiene contenido, para no dibujar caras vacías.
+      FACE_ORDER.forEach((k, i) => {
+        const has = rectHasContent(img, overlay[k]);
+        mats[i] = has ? outerMat : hiddenMat;
+        if (has) alguna = true;
+      });
+      outer.visible = partOuterVisible[name] && outerVisible && alguna;
       // La cuadrícula externa es una guía: visible aunque la capa esté vacía (solo líneas).
       gridOuter.visible = gridVisible && partOuterVisible[name] && outerVisible;
       // La interior se oculta mientras se ve la exterior (no solapar dos cuadrículas).
       reg[name].grid.visible = gridVisible && baseVisible && partBaseVisible[name] && !outerVisible;
     }
-    buildOuterContour(img);
     refreshSelVisibility();
-  }
-
-  // Silueta del contenido de la capa externa: enmarca el perímetro de los texeles
-  // con contenido en cada cara del overlay (línea fina, sin relleno).
-  function buildOuterContour(img: ImageData) {
-    for (const name in reg) {
-      const { outerLines, outerGeo, part } = reg[name];
-      const verts: number[] = [];
-      const pos = outerGeo.attributes.position as THREE.BufferAttribute;
-      FACE_ORDER.forEach((fk, fi) => {
-        const R = part.overlay[fk];
-        const has = (i: number, j: number) =>
-          i >= 0 && j >= 0 && i < R.w && j < R.h && img.data[((R.y + j) * TEX + (R.x + i)) * 4 + 3] !== 0;
-        p0.fromBufferAttribute(pos, fi * 4 + 0);
-        pX.fromBufferAttribute(pos, fi * 4 + 1).sub(p0);
-        pY.fromBufferAttribute(pos, fi * 4 + 2).sub(p0);
-        tmpN.copy(pX).cross(pY).normalize().multiplyScalar(0.04);
-        const at = (ci: number, cj: number, out: THREE.Vector3) =>
-          out.copy(p0).addScaledVector(pX, ci / R.w).addScaledVector(pY, cj / R.h).add(tmpN);
-        const seg = (ax: number, ay: number, bx: number, by: number) => {
-          at(ax, ay, tmpA); at(bx, by, tmpB);
-          verts.push(tmpA.x, tmpA.y, tmpA.z, tmpB.x, tmpB.y, tmpB.z);
-        };
-        for (let j = 0; j < R.h; j++) for (let i = 0; i < R.w; i++) {
-          if (!has(i, j)) continue;
-          if (!has(i, j - 1)) seg(i, j, i + 1, j);
-          if (!has(i, j + 1)) seg(i, j + 1, i + 1, j + 1);
-          if (!has(i - 1, j)) seg(i, j, i, j + 1);
-          if (!has(i + 1, j)) seg(i + 1, j, i + 1, j + 1);
-        }
-      });
-      const g = outerLines.geometry;
-      g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-      g.computeBoundingSphere();
-    }
   }
 
   function refreshSelVisibility() {

@@ -1,6 +1,6 @@
 import { TEX } from './skin';
 
-export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'fill' | 'gradient' | 'select';
+export type Tool = 'pencil' | 'eraser' | 'eyedropper' | 'fill' | 'gradient' | 'select' | 'move';
 // Modos de la herramienta seleccionar.
 export type SelectMode = 'rect' | 'colorContiguous' | 'color' | 'part' | 'face';
 export interface GradStop { color: string; pos: number; a: number }
@@ -54,6 +54,10 @@ export class SkinEditor {
   // Pegado flotante: se posiciona arrastrando antes de confirmar (Enter / clic fuera).
   private floating: { img: ImageData; canvas: HTMLCanvasElement; x: number; y: number } | null = null;
   private floatGrab: { dx: number; dy: number } | null = null;
+  // Herramienta mover: el flotante procede de la propia selección (recorte de la
+  // capa activa) y se confirma al soltar, volcándolo sobre la MISMA capa.
+  private floatingIsMove = false;
+  private moveOrigin = { x: 0, y: 0 };
 
   // Cursor (para previsualizar el grosor) y arrastre (degradado/selección)
   private hover: { x: number; y: number } | null = null;
@@ -99,7 +103,7 @@ export class SkinEditor {
     display.addEventListener('pointerdown', (e) => {
       const p = toTex(e);
       // Pegado flotante: arrastrar dentro = mover · clic fuera = confirmar posición.
-      if (this.floating) {
+      if (this.floating && !this.floatingIsMove) {
         const f = this.floating;
         const inside = p.x >= f.x && p.x < f.x + f.img.width && p.y >= f.y && p.y < f.y + f.img.height;
         if (inside) { this.floatGrab = { dx: p.x - f.x, dy: p.y - f.y }; display.setPointerCapture(e.pointerId); }
@@ -107,6 +111,11 @@ export class SkinEditor {
         return;
       }
       display.setPointerCapture(e.pointerId);
+      // Mover: coge los píxeles seleccionados y los arrastra (confirma al soltar).
+      if (this.tool === 'move') {
+        if (this.hasSelection() && this.inSel(p.x, p.y)) this.beginMove(p);
+        return;
+      }
       if (this.tool === 'select') {
         // shift = sumar zona · ctrl/cmd = restar · sin modificador = reemplazar
         this.selOp = e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace';
@@ -143,7 +152,11 @@ export class SkinEditor {
       dragging = false; this.dragA = null; this.dragB = null;
     };
     display.addEventListener('pointerup', () => {
-      if (this.floating) { this.floatGrab = null; return; }
+      if (this.floating) {
+        if (this.floatingIsMove) this.commitMove();   // mover: confirma al soltar
+        else this.floatGrab = null;
+        return;
+      }
       painting = false; finishDrag();
     });
     display.addEventListener('pointerleave', () => { painting = false; this.hover = null; finishDrag(); this.render(); });
@@ -646,9 +659,69 @@ export class SkinEditor {
 
   cancelPaste() {
     if (!this.floating) return;
-    this.floating = null; this.floatGrab = null;
+    this.floating = null; this.floatGrab = null; this.floatingIsMove = false;
     if (!this.hasSelection()) this.stopAnts();
     this.render();
+  }
+
+  // ── Mover selección ──────────────────────────────────────────────────────────
+  // Coge los píxeles seleccionados de la capa activa (los recorta a un flotante y
+  // los borra de la capa), para arrastrarlos y soltarlos en otra posición.
+  private beginMove(p: { x: number; y: number }) {
+    const s = this.selection;
+    if (!s) return;
+    this.onBeforeChange();
+    const src = this.tctx.getImageData(0, 0, TEX, TEX);
+    const canvas = document.createElement('canvas');
+    canvas.width = s.w; canvas.height = s.h;
+    const cctx = canvas.getContext('2d')!;
+    const img = cctx.createImageData(s.w, s.h);
+    // Recorta SOLO los texeles de la máscara (no todo el bbox) al flotante.
+    for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) {
+      const sx = s.x + x, sy = s.y + y;
+      if (!this.inSel(sx, sy)) continue;
+      const si = (sy * TEX + sx) * 4, di = (y * s.w + x) * 4;
+      img.data[di] = src.data[si]; img.data[di + 1] = src.data[si + 1];
+      img.data[di + 2] = src.data[si + 2]; img.data[di + 3] = src.data[si + 3];
+    }
+    cctx.putImageData(img, 0, 0);
+    // Borra los texeles cogidos de la capa activa.
+    for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++)
+      if (this.inSel(x, y)) src.data[(y * TEX + x) * 4 + 3] = 0;
+    this.tctx.putImageData(src, 0, 0);
+    this.onChange();
+    this.floating = { img, canvas, x: s.x, y: s.y };
+    this.floatGrab = { dx: p.x - s.x, dy: p.y - s.y };
+    this.floatingIsMove = true;
+    this.moveOrigin = { x: s.x, y: s.y };
+    this.startAnts();
+    this.render();
+  }
+
+  // Vuelca el flotante de movimiento sobre la MISMA capa (composición normal, solo
+  // píxeles opacos) y desplaza la selección para que viaje con los píxeles.
+  private commitMove() {
+    if (!this.floating) return;
+    const f = this.floating;
+    const dx = f.x - this.moveOrigin.x, dy = f.y - this.moveOrigin.y;
+    this.floating = null; this.floatGrab = null; this.floatingIsMove = false;
+    this.tctx.drawImage(f.canvas, f.x, f.y);
+    this.shiftSelection(dx, dy);
+    this.onChange();
+    this.commitSelection();
+  }
+
+  private shiftSelection(dx: number, dy: number) {
+    if (this.selMask) {
+      const nm = new Uint8Array(TEX * TEX);
+      for (let y = 0; y < TEX; y++) for (let x = 0; x < TEX; x++) {
+        if (!this.selMask[y * TEX + x]) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < TEX && ny < TEX) nm[ny * TEX + nx] = 1;
+      }
+      this.selMask = nm;
+    }
+    if (this.selection) this.selection = { ...this.selection, x: this.selection.x + dx, y: this.selection.y + dy };
   }
 
   // Pinta SOLO el borde de la selección (naranja) en un contexto 64×64, para el 3D:
@@ -739,7 +812,8 @@ export class SkinEditor {
       ctx.strokeRect(g.x * s + 0.5, g.y * s + 0.5, g.w * s - 1, g.h * s - 1);
     }
 
-    if (this.hasSelection()) this.strokeSelection(ctx, s);
+    // Mientras se mueve, la selección viaja como flotante: no dibujar su contorno en origen.
+    if (this.hasSelection() && !this.floatingIsMove) this.strokeSelection(ctx, s);
 
     // ── Pegado flotante: contenido + borde animado en la posición actual ─────
     if (this.floating) {

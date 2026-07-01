@@ -133,6 +133,11 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .hud-part:hover { opacity: 0.5; }
 .hud-part.active { opacity: 0.92; }
+/* Capa externa activa: la silueta se dibuja como CONTORNO (sin relleno) para
+   distinguir de un vistazo que se está trabajando en la capa externa. */
+.parts-hud.outer-mode .hud-part { fill: none; stroke: var(--accent); stroke-width: 1.4; }
+.parts-hud.outer-mode .hud-part.active { opacity: 0.95; }
+.parts-hud.outer-mode .hud-part:not(.active) { opacity: 0.32; }
 /* Capas interna/externa en el HUD (estilo Photoshop: ojo + nombre) */
 .hud-layers { width: 100%; display: flex; flex-direction: column; gap: 4px; }
 .hud-layer-row {

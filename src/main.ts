@@ -417,6 +417,7 @@ function mqFinish(e: PointerEvent) {
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;               // derecho orbita (OrbitControls)
   const tool = editor.tool;
+  if (tool === 'move') return;               // mover actúa sobre la textura 2D, no sobre el 3D
   if (tool === 'select') {
     editor.selOp = e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace';
     if (editor.selectMode === 'rect') {     // rectángulo LIBRE por arrastre (no selecciona el bloque)
@@ -524,7 +525,7 @@ function buildMirrorMap(): Int32Array | null {
 editor.fillMirror = buildMirrorMap;
 
 // atajos: deshacer, copiar/pegar selección, quitar selección
-const TOOL_KEYS: Record<string, Tool> = { b: 'pencil', e: 'eraser', i: 'eyedropper', r: 'fill', d: 'gradient', a: 'select' };
+const TOOL_KEYS: Record<string, Tool> = { b: 'pencil', e: 'eraser', i: 'eyedropper', r: 'fill', d: 'gradient', a: 'select', v: 'move' };
 const SELECT_MODES: SelectMode[] = ['rect', 'colorContiguous', 'color', 'part', 'face'];
 window.addEventListener('keydown', (e) => {
   // No interceptar mientras se escribe en un campo.
@@ -630,7 +631,7 @@ window.addEventListener('keydown', (e) => {
 function showEl(id: string, v: boolean) { const e = document.getElementById(id); if (e) (e as HTMLElement).hidden = !v; }
 function updateToolUI(tool: Tool) {
   const brush = tool === 'pencil' || tool === 'eraser';
-  showEl('brush-panel', tool !== 'eyedropper' && tool !== 'select');
+  showEl('brush-panel', tool !== 'eyedropper' && tool !== 'select' && tool !== 'move');
   showEl('row-size', brush);
   showEl('row-shape', brush);
   showEl('row-feather', brush);
@@ -1032,6 +1033,8 @@ function setPaintLayer(layer: 'inner' | 'outer') {
   // Elegir capa a pintar solo activa ESA capa; la visibilidad de la otra no se toca.
   if (layer === 'outer') { outerVisible = true; model.setOuterVisible(true); setEye('outer', true); }
   else { baseVisible = true; model.setBaseVisible(true); setEye('inner', true); }
+  // La silueta del HUD se muestra como contorno cuando la capa externa está activa.
+  document.getElementById('parts-hud')?.classList.toggle('outer-mode', layer === 'outer');
   syncPartHud();
 }
 document.querySelectorAll<HTMLElement>('#layer-toggle .hud-layer-row').forEach(row => {
