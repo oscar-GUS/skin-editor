@@ -214,19 +214,22 @@
         <p class="grad-hint">Clic en la barra = nuevo punto · arrastra los puntos para moverlos · luego arrastra A→B sobre la textura 2D o sobre el modelo 3D para aplicarlo.</p>
       </div>
 
-      <div class="color-row">
-        <input type="color" id="color" value="#A97C50" title="Elegir cualquier color">
-        <div class="swatches" id="swatches"></div>
-      </div>
+      <!-- Panel de colores: solo visible con herramientas que usan color. -->
+      <div id="colors-panel">
+        <div class="color-row">
+          <input type="color" id="color" value="#A97C50" title="Elegir cualquier color">
+          <div class="swatches" id="swatches"></div>
+        </div>
 
-      <div class="recents-wrap">
-        <span class="recents-label">Recientes</span>
-        <div class="recents" id="recents"></div>
-      </div>
+        <div class="recents-wrap">
+          <span class="recents-label">Recientes</span>
+          <div class="recents" id="recents"></div>
+        </div>
 
-      <div class="recents-wrap">
-        <span class="recents-label">Colores en la skin</span>
-        <div class="skin-colors" id="skin-colors"></div>
+        <div class="recents-wrap">
+          <span class="recents-label">Colores en la skin</span>
+          <div class="skin-colors" id="skin-colors"></div>
+        </div>
       </div>
     </aside>
 

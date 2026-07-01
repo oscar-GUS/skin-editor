@@ -135,7 +135,9 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .hud-part.active { opacity: 0.92; }
 /* Capa externa activa: la silueta se dibuja como CONTORNO (sin relleno) para
    distinguir de un vistazo que se está trabajando en la capa externa. */
-.parts-hud.outer-mode .hud-part { fill: none; stroke: var(--accent); stroke-width: 1.4; }
+/* fill:none no captura clics en el interior → pointer-events:all para poder
+   pulsar dentro del bloque, no solo justo sobre la línea de contorno. */
+.parts-hud.outer-mode .hud-part { fill: none; stroke: var(--accent); stroke-width: 1.4; pointer-events: all; }
 .parts-hud.outer-mode .hud-part.active { opacity: 0.95; }
 .parts-hud.outer-mode .hud-part:not(.active) { opacity: 0.32; }
 /* Capas interna/externa en el HUD (estilo Photoshop: ojo + nombre) */

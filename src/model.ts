@@ -116,7 +116,6 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
   const outerMat = new THREE.MeshStandardMaterial({
     map: texture, roughness: 1, metalness: 0,
     alphaTest: 0.5, side: THREE.DoubleSide,
-    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
   });
   // Material para caras de la capa exterior SIN contenido: no dibuja nada.
   const hiddenMat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });

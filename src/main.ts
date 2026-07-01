@@ -157,17 +157,19 @@ renderer.setAnimationLoop(() => {
 
 // ── 3D painting (siempre activo, botón izquierdo) ─────────────────────────────
 let painting3d = false;
+let move3d = false;               // arrastrando una selección con la herramienta mover en 3D
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 
-// Cursor de pincel en 3D: anillo naranja sobre la superficie, del tamaño del grosor.
-const brushRingGeo = new THREE.RingGeometry(0.4, 0.5, 40);
-const brushRingMat = new THREE.MeshBasicMaterial({
-  color: 0xF4811F, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthTest: false,
-});
-const brushCursor = new THREE.Mesh(brushRingGeo, brushRingMat);
+// Cursor de pincel en 3D: círculo de LÍNEA fina (mismo grosor que el cuadrado, no
+// un anillo relleno) sobre la superficie, del tamaño del grosor.
+const circPts: THREE.Vector3[] = [];
+for (let i = 0; i < 48; i++) { const a = (i / 48) * Math.PI * 2; circPts.push(new THREE.Vector3(Math.cos(a) * 0.5, Math.sin(a) * 0.5, 0)); }
+const brushRingGeo = new THREE.BufferGeometry().setFromPoints(circPts);
+const brushCursor = new THREE.LineLoop(brushRingGeo, new THREE.LineBasicMaterial({ color: 0xF4811F, depthTest: false }));
 brushCursor.renderOrder = 10;
 brushCursor.visible = false;
+brushCursor.frustumCulled = false;
 scene.add(brushCursor);
 // Cursor cuadrado (para el pincel cuadrado), mismo tamaño que el grosor.
 const sqGeo = new THREE.BufferGeometry().setFromPoints([
@@ -417,7 +419,14 @@ function mqFinish(e: PointerEvent) {
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;               // derecho orbita (OrbitControls)
   const tool = editor.tool;
-  if (tool === 'move') return;               // mover actúa sobre la textura 2D, no sobre el 3D
+  if (tool === 'move') {                     // coger la selección y arrastrarla sobre el modelo
+    if (editor.hasSelection()) {
+      castFromEvent(e);
+      const p = pixelFromRaycaster(raycaster);
+      if (p && editor.beginMoveAt(p.x, p.y)) { move3d = true; e.stopImmediatePropagation(); }
+    }
+    return;
+  }
   if (tool === 'select') {
     editor.selOp = e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace';
     if (editor.selectMode === 'rect') {     // rectángulo LIBRE por arrastre (no selecciona el bloque)
@@ -450,6 +459,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 }, true);
 renderer.domElement.addEventListener('pointermove', (e) => {
   if (painting3d) paintFromEvent(e);
+  if (move3d) { castFromEvent(e); const p = pixelFromRaycaster(raycaster); if (p) editor.moveFloatTo(p.x, p.y); }
   if (mqActive) mqUpdate(e);
   if (gradActive) { const pt = hitPoint(e); if (pt) { gradPtB.copy(pt); setGradLine(gradPtA, gradPtB); } }
   updateBrushCursor(e);
@@ -457,6 +467,7 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 renderer.domElement.addEventListener('pointerleave', () => { brushCursor.visible = false; brushCursorSq.visible = false; });
 window.addEventListener('pointerup', (e) => {
   painting3d = false;
+  if (move3d) { editor.endMove(); move3d = false; }
   if (gradActive) { applyGradient3D(); gradActive = false; showGradGuides(false); }
   if (mqActive) { mqFinish(e); mqActive = false; }
 });
@@ -640,6 +651,9 @@ function updateToolUI(tool: Tool) {
   showEl('row-toggles', brush || tool === 'fill');   // relleno: bloquear alfa + simetría
   showEl('grad-panel', tool === 'gradient');
   showEl('select-panel', tool === 'select');
+  // El panel de colores solo aparece con herramientas que usan color; borrar,
+  // seleccionar y mover no lo necesitan.
+  showEl('colors-panel', tool === 'pencil' || tool === 'fill' || tool === 'gradient' || tool === 'eyedropper');
 }
 function selectTool(tool: Tool) {
   document.querySelectorAll<HTMLElement>('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === tool));

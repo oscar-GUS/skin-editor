@@ -58,6 +58,7 @@ export class SkinEditor {
   // capa activa) y se confirma al soltar, volcándolo sobre la MISMA capa.
   private floatingIsMove = false;
   private moveOrigin = { x: 0, y: 0 };
+  private moveApplied = { x: 0, y: 0 };   // desplazamiento de selección ya aplicado durante el arrastre
 
   // Cursor (para previsualizar el grosor) y arrastre (degradado/selección)
   private hover: { x: number; y: number } | null = null;
@@ -134,10 +135,7 @@ export class SkinEditor {
       const p = toTex(e);
       this.hover = p;
       if (this.floating && this.floatGrab) {
-        const f = this.floating;
-        f.x = Math.max(0, Math.min(TEX - f.img.width, p.x - this.floatGrab.dx));
-        f.y = Math.max(0, Math.min(TEX - f.img.height, p.y - this.floatGrab.dy));
-        this.render();
+        this.setFloatPos(p.x - this.floatGrab.dx, p.y - this.floatGrab.dy);
         return;
       }
       if (painting) this.paintPixel(p.x, p.y);
@@ -694,22 +692,54 @@ export class SkinEditor {
     this.floatGrab = { dx: p.x - s.x, dy: p.y - s.y };
     this.floatingIsMove = true;
     this.moveOrigin = { x: s.x, y: s.y };
+    this.moveApplied = { x: 0, y: 0 };
     this.startAnts();
     this.render();
   }
 
+  // Posiciona el flotante (esquina sup-izq deseada, se recorta al lienzo). Si es un
+  // movimiento, arrastra también la selección para que su contorno (incluido el del
+  // 3D) muestre en vivo dónde van a caer los píxeles.
+  private setFloatPos(nx: number, ny: number) {
+    const f = this.floating;
+    if (!f) return;
+    f.x = Math.max(0, Math.min(TEX - f.img.width, nx));
+    f.y = Math.max(0, Math.min(TEX - f.img.height, ny));
+    if (this.floatingIsMove) {
+      const dx = (f.x - this.moveOrigin.x) - this.moveApplied.x;
+      const dy = (f.y - this.moveOrigin.y) - this.moveApplied.y;
+      if (dx || dy) {
+        this.shiftSelection(dx, dy);
+        this.moveApplied.x += dx; this.moveApplied.y += dy;
+        this.onSelectionChange();   // refresca el contorno de preview (2D y 3D)
+      }
+    }
+    this.render();
+  }
+
   // Vuelca el flotante de movimiento sobre la MISMA capa (composición normal, solo
-  // píxeles opacos) y desplaza la selección para que viaje con los píxeles.
+  // píxeles opacos). La selección ya viajó con el arrastre.
   private commitMove() {
     if (!this.floating) return;
     const f = this.floating;
-    const dx = f.x - this.moveOrigin.x, dy = f.y - this.moveOrigin.y;
     this.floating = null; this.floatGrab = null; this.floatingIsMove = false;
     this.tctx.drawImage(f.canvas, f.x, f.y);
-    this.shiftSelection(dx, dy);
     this.onChange();
     this.commitSelection();
   }
+
+  // ── API de movimiento desde la vista 3D (le pasan el texel bajo el cursor) ────
+  isMoving(): boolean { return this.floatingIsMove; }
+  beginMoveAt(x: number, y: number): boolean {
+    if (this.tool !== 'move' || !this.hasSelection() || !this.inSel(x, y)) return false;
+    this.beginMove({ x, y });
+    return true;
+  }
+  moveFloatTo(x: number, y: number) {
+    if (!this.floating || !this.floatGrab || !this.floatingIsMove) return;
+    this.setFloatPos(x - this.floatGrab.dx, y - this.floatGrab.dy);
+  }
+  endMove() { if (this.floating && this.floatingIsMove) this.commitMove(); }
 
   private shiftSelection(dx: number, dy: number) {
     if (this.selMask) {
@@ -871,23 +901,34 @@ export class SkinEditor {
           ctx.fillRect(x * s, y * s, s, s);
         }
       }
-      // contorno del tamaño del pincel
-      ctx.lineWidth = 1.5; ctx.strokeStyle = `rgba(${col},0.95)`;
-      if (this.brushShape === 'circle' && size > 1) {
-        ctx.beginPath(); ctx.arc(left + side / 2, top + side / 2, side / 2, 0, Math.PI * 2); ctx.stroke();
-      } else {
-        ctx.strokeRect(left + 0.5, top + 0.5, side - 1, side - 1);
-      }
-      // núcleo sólido (donde termina el difuminado)
-      if (this.feather > 0 && size > 1) {
-        const core = (1 - this.feather);
-        const cs = side * core;
-        ctx.setLineDash([3, 2]); ctx.strokeStyle = `rgba(${col},0.6)`;
-        if (this.brushShape === 'circle') {
-          ctx.beginPath(); ctx.arc(left + side / 2, top + side / 2, cs / 2, 0, Math.PI * 2); ctx.stroke();
-        } else {
-          ctx.strokeRect(left + (side - cs) / 2, top + (side - cs) / 2, cs, cs);
+      // Contorno del footprint REAL de píxeles (traza el borde de las celdas que se
+      // pintan), fino y pegado al pixelado — igual de delgado en círculo y cuadrado.
+      const traceFootprint = (inside: (dx: number, dy: number) => boolean) => {
+        ctx.beginPath();
+        for (let dy = 0; dy < size; dy++) {
+          for (let dx = 0; dx < size; dx++) {
+            if (!inside(dx, dy)) continue;
+            const x = (this.hover!.x + start + dx) * s, y = (this.hover!.y + start + dy) * s;
+            if (!inside(dx, dy - 1)) { ctx.moveTo(x, y); ctx.lineTo(x + s, y); }
+            if (!inside(dx, dy + 1)) { ctx.moveTo(x, y + s); ctx.lineTo(x + s, y + s); }
+            if (!inside(dx - 1, dy)) { ctx.moveTo(x, y); ctx.lineTo(x, y + s); }
+            if (!inside(dx + 1, dy)) { ctx.moveTo(x + s, y); ctx.lineTo(x + s, y + s); }
+          }
         }
+        ctx.stroke();
+      };
+      const inFoot = (dx: number, dy: number) =>
+        dx >= 0 && dy >= 0 && dx < size && dy < size && this.brushAlpha(dx, dy) !== null;
+      ctx.lineWidth = 1.5; ctx.strokeStyle = `rgba(${col},0.95)`;
+      ctx.setLineDash([]);
+      traceFootprint(inFoot);
+      // Núcleo sólido (donde termina el difuminado): borde de las celdas 100% opacas.
+      if (this.feather > 0 && size > 1) {
+        const inCore = (dx: number, dy: number) =>
+          dx >= 0 && dy >= 0 && dx < size && dy < size && this.brushAlpha(dx, dy) === 1;
+        ctx.setLineDash([3, 2]); ctx.strokeStyle = `rgba(${col},0.6)`;
+        traceFootprint(inCore);
+        ctx.setLineDash([]);
       }
       ctx.restore();
     }
