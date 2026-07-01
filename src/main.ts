@@ -57,8 +57,6 @@ function recomposite() {
   for (let i = 0; i < layers.length; i++) {
     const l = layers[i];
     if (!l.visible) continue;
-    const g = groupById(l.groupId);
-    if (g && !g.visible) continue;                                    // carpeta oculta
     ctx.globalCompositeOperation = i === 0 ? 'source-over' : l.blend;  // la base siempre normal
     ctx.drawImage(l.canvas, 0, 0);
   }
@@ -885,14 +883,10 @@ document.querySelectorAll<HTMLButtonElement>('#sym-axis button').forEach(btn => 
 });
 
 // ── Capas (estilo Photoshop) ─────────────────────────────────────────────────
-interface Layer { id: number; name: string; canvas: HTMLCanvasElement; visible: boolean; blend: GlobalCompositeOperation; groupId?: number | null; }
-interface Group { id: number; name: string; collapsed: boolean; visible: boolean; }
+interface Layer { id: number; name: string; canvas: HTMLCanvasElement; visible: boolean; blend: GlobalCompositeOperation; }
 let layers: Layer[] = [];     // índice 0 = base (abajo); el último = arriba del todo
-let groups: Group[] = [];     // carpetas (sus capas van contiguas en `layers`)
 let activeId = 0;
 let nextId = 1;
-let nextGroupId = 1;
-const groupById = (id: number | null | undefined) => id == null ? undefined : groups.find(g => g.id === id);
 const baseImage = blankCanvas();   // base "limpia" para resetear
 
 const layersEl = document.getElementById('layers')!;
@@ -948,123 +942,55 @@ function mergeSelectedLayers() {
   commit();
 }
 
-// Cabecera de carpeta (grupo): colapsar, ojo (oculta todos sus miembros), desagrupar.
-function buildGroupHeader(g: Group) {
-  const row = document.createElement('div');
-  row.className = 'group-row';
-
-  const arrow = document.createElement('button');
-  arrow.className = 'layer-mini';
-  arrow.textContent = g.collapsed ? '▸' : '▾';
-  arrow.title = g.collapsed ? 'Expandir' : 'Colapsar';
-  arrow.addEventListener('click', (ev) => { ev.stopPropagation(); g.collapsed = !g.collapsed; renderLayers(); });
-
-  const eye = document.createElement('button');
-  eye.className = 'layer-eye' + (g.visible ? '' : ' off');
-  eye.title = g.visible ? 'Ocultar carpeta' : 'Mostrar carpeta';
-  eye.textContent = g.visible ? '👁' : '🚫';
-  eye.addEventListener('click', (ev) => { ev.stopPropagation(); pushHistory(); g.visible = !g.visible; renderLayers(); commit(); });
-
-  const name = document.createElement('span');
-  name.className = 'layer-name';
-  name.textContent = '📁 ' + g.name;
-
-  const un = document.createElement('button');
-  un.className = 'layer-mini'; un.textContent = '⊟'; un.title = 'Desagrupar';
-  un.addEventListener('click', (ev) => { ev.stopPropagation(); ungroup(g.id); });
-
-  row.append(arrow, eye, name, un);
-  layersEl.appendChild(row);
-}
-
-function buildLayerRow(l: Layer, i: number, indented: boolean) {
-  const isBase = i === 0;
-  const row = document.createElement('div');
-  row.className = 'layer-row' + (l.id === activeId ? ' active' : (selectedIds.has(l.id) ? ' multi' : '')) + (indented ? ' in-group' : '');
-
-  const eye = document.createElement('button');
-  eye.className = 'layer-eye' + (l.visible ? '' : ' off');
-  eye.title = l.visible ? 'Ocultar' : 'Mostrar';
-  eye.textContent = l.visible ? '👁' : '🚫';
-  eye.addEventListener('click', (ev) => { ev.stopPropagation(); pushHistory(); l.visible = !l.visible; renderLayers(); commit(); });
-
-  const name = document.createElement('span');
-  name.className = 'layer-name';
-  name.textContent = l.name;
-
-  const up = document.createElement('button');
-  up.className = 'layer-mini'; up.textContent = '▲'; up.title = 'Subir';
-  up.disabled = i >= layers.length - 1;
-  up.addEventListener('click', (ev) => { ev.stopPropagation(); moveLayer(l.id, +1); });
-
-  const down = document.createElement('button');
-  down.className = 'layer-mini'; down.textContent = '▼'; down.title = 'Bajar';
-  down.disabled = i <= 1;   // no se puede bajar por debajo de la base
-  down.addEventListener('click', (ev) => { ev.stopPropagation(); moveLayer(l.id, -1); });
-
-  const del = document.createElement('button');
-  del.className = 'layer-mini layer-del'; del.textContent = '🗑'; del.title = 'Eliminar';
-  del.disabled = isBase;
-  del.addEventListener('click', (ev) => { ev.stopPropagation(); deleteLayer(l.id); });
-
-  row.append(eye, name, up, down, del);
-  row.addEventListener('click', (ev) => onLayerRowClick(l.id, ev));
-  layersEl.appendChild(row);
-
-  // Fila de modo de fusión de la capa (la base siempre va normal).
-  if (!isBase) {
-    const blendSel = document.createElement('select');
-    blendSel.className = 'layer-blend' + (indented ? ' in-group' : '');
-    fillBlendSelect(blendSel, l.blend);
-    blendSel.title = 'Modo de fusión de la capa';
-    blendSel.addEventListener('click', (ev) => ev.stopPropagation());
-    blendSel.addEventListener('change', () => { pushHistory(); l.blend = blendSel.value as GlobalCompositeOperation; commit(); });
-    layersEl.appendChild(blendSel);
-  }
-}
-
 function renderLayers() {
   layersEl.replaceChildren();
   // De arriba (último) hacia abajo (base), como Photoshop.
-  let lastGid: number | null = null;
   for (let i = layers.length - 1; i >= 0; i--) {
     const l = layers[i];
-    const gid = l.groupId ?? null;
-    if (gid != null && gid !== lastGid) {          // al entrar en una carpeta, su cabecera
-      const g = groupById(gid);
-      if (g) buildGroupHeader(g);
+    const isBase = i === 0;
+    const row = document.createElement('div');
+    row.className = 'layer-row' + (l.id === activeId ? ' active' : (selectedIds.has(l.id) ? ' multi' : ''));
+
+    const eye = document.createElement('button');
+    eye.className = 'layer-eye' + (l.visible ? '' : ' off');
+    eye.title = l.visible ? 'Ocultar' : 'Mostrar';
+    eye.textContent = l.visible ? '👁' : '🚫';
+    eye.addEventListener('click', (ev) => { ev.stopPropagation(); pushHistory(); l.visible = !l.visible; renderLayers(); commit(); });
+
+    const name = document.createElement('span');
+    name.className = 'layer-name';
+    name.textContent = l.name;
+
+    const up = document.createElement('button');
+    up.className = 'layer-mini'; up.textContent = '▲'; up.title = 'Subir';
+    up.disabled = i >= layers.length - 1;
+    up.addEventListener('click', (ev) => { ev.stopPropagation(); moveLayer(l.id, +1); });
+
+    const down = document.createElement('button');
+    down.className = 'layer-mini'; down.textContent = '▼'; down.title = 'Bajar';
+    down.disabled = i <= 1;   // no se puede bajar por debajo de la base
+    down.addEventListener('click', (ev) => { ev.stopPropagation(); moveLayer(l.id, -1); });
+
+    const del = document.createElement('button');
+    del.className = 'layer-mini layer-del'; del.textContent = '🗑'; del.title = 'Eliminar';
+    del.disabled = isBase;
+    del.addEventListener('click', (ev) => { ev.stopPropagation(); deleteLayer(l.id); });
+
+    row.append(eye, name, up, down, del);
+    row.addEventListener('click', (ev) => onLayerRowClick(l.id, ev));
+    layersEl.appendChild(row);
+
+    // Fila de modo de fusión de la capa (la base siempre va normal).
+    if (!isBase) {
+      const blendSel = document.createElement('select');
+      blendSel.className = 'layer-blend';
+      fillBlendSelect(blendSel, l.blend);
+      blendSel.title = 'Modo de fusión de la capa';
+      blendSel.addEventListener('click', (ev) => ev.stopPropagation());
+      blendSel.addEventListener('change', () => { pushHistory(); l.blend = blendSel.value as GlobalCompositeOperation; commit(); });
+      layersEl.appendChild(blendSel);
     }
-    lastGid = gid;
-    const g = groupById(gid);
-    if (g && g.collapsed) continue;                // carpeta colapsada: no listar miembros
-    buildLayerRow(l, i, gid != null);
   }
-}
-
-// Agrupa las capas seleccionadas (no la base) en una carpeta nueva, contiguas.
-function groupSelected() {
-  const members = layers.filter((l, i) => i > 0 && selectedIds.has(l.id));
-  if (members.length < 1) return;
-  pushHistory();
-  const gid = nextGroupId++;
-  groups.push({ id: gid, name: `Carpeta ${gid}`, collapsed: false, visible: true });
-  const lowestIdx = Math.min(...members.map(m => layers.indexOf(m)));
-  const memberSet = new Set(members.map(m => m.id));
-  const belowCount = layers.slice(0, lowestIdx).filter(l => !memberSet.has(l.id)).length;
-  const remaining = layers.filter(l => !memberSet.has(l.id));
-  members.forEach(m => m.groupId = gid);
-  remaining.splice(belowCount, 0, ...members);     // reinsertar contiguas
-  layers = remaining;
-  selectedIds = new Set(members.map(m => m.id));
-  renderLayers(); commit();
-}
-
-// Deshace una carpeta (las capas se quedan donde están, sueltas).
-function ungroup(gid: number) {
-  pushHistory();
-  layers.forEach(l => { if (l.groupId === gid) l.groupId = null; });
-  groups = groups.filter(g => g.id !== gid);
-  renderLayers(); commit();
 }
 
 function addLayer() {
@@ -1129,7 +1055,6 @@ function mergeLayerDown(id: number) {
 
 document.getElementById('layer-add')!.addEventListener('click', addLayer);
 document.getElementById('layer-dup')!.addEventListener('click', () => duplicateLayer(activeId));
-document.getElementById('layer-group')!.addEventListener('click', groupSelected);
 document.getElementById('layer-merge')!.addEventListener('click', () => {
   if (selectedIds.size >= 2) mergeSelectedLayers();   // varias seleccionadas → unir en una
   else mergeLayerDown(activeId);                        // si no, fusionar con la de abajo
