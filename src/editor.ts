@@ -757,6 +757,43 @@ export class SkinEditor {
   }
   endMove() { if (this.floating && this.floatingIsMove) this.commitMove(); }
 
+  // Rota el flotante (mover/pegar) 90°: dir=1 derecha (horario), dir=-1 izquierda.
+  // Remapeo de píxeles (sin interpolación) para mantener el pixel-art nítido.
+  rotateFloat(dir: 1 | -1) {
+    const f = this.floating;
+    if (!f) return;
+    const ow = f.img.width, oh = f.img.height;
+    const nw = oh, nh = ow;
+    const src = f.img.data;
+    const c = document.createElement('canvas');
+    c.width = nw; c.height = nh;
+    const cx = c.getContext('2d')!;
+    const out = cx.createImageData(nw, nh);
+    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
+      const dx = dir === 1 ? oh - 1 - y : y;
+      const dy = dir === 1 ? x : ow - 1 - x;
+      const si = (y * ow + x) * 4, di = (dy * nw + dx) * 4;
+      out.data[di] = src[si]; out.data[di + 1] = src[si + 1];
+      out.data[di + 2] = src[si + 2]; out.data[di + 3] = src[si + 3];
+    }
+    cx.putImageData(out, 0, 0);
+    // Mantener el mismo centro y recortar al lienzo.
+    const ccx = f.x + ow / 2, ccy = f.y + oh / 2;
+    const x = Math.max(0, Math.min(TEX - nw, Math.round(ccx - nw / 2)));
+    const y = Math.max(0, Math.min(TEX - nh, Math.round(ccy - nh / 2)));
+    this.floating = { img: out, canvas: c, x, y };
+    if (this.floatingIsMove) {
+      // La selección pasa a ser el rectángulo del flotante ya rotado.
+      this.selMask = null;
+      this.selection = { x, y, w: nw, h: nh };
+      this.moveOrigin = { x, y };
+      this.moveApplied = { x: 0, y: 0 };
+      this.onSelectionChange();
+    }
+    this.onChange();
+    this.render();
+  }
+
   private shiftSelection(dx: number, dy: number) {
     if (this.selMask) {
       const nm = new Uint8Array(TEX * TEX);

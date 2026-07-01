@@ -32,7 +32,7 @@
           <span class="recents-label">Capas</span>
           <div class="layer-tools">
             <button id="layer-dup" class="mini-btn" title="Duplicar capa seleccionada">⧉</button>
-            <button id="layer-merge" class="mini-btn" title="Fusionar con la capa de abajo">⤵</button>
+            <button id="layer-merge" class="mini-btn" title="Fusionar: varias seleccionadas (Ctrl/Shift+clic) → unir en una; si no, con la de abajo">⤵</button>
             <button id="layer-add" class="mini-btn">+ Capa</button>
           </div>
         </div>
@@ -193,6 +193,10 @@
           <button id="sel-cut">Cortar</button>
           <button id="sel-paste">Pegar</button>
           <button id="sel-clear">Quitar</button>
+        </div>
+        <div class="select-actions" id="move-rotate" hidden>
+          <button id="sel-rot-l" title="Rotar 90° a la izquierda (,)">↺ Izq</button>
+          <button id="sel-rot-r" title="Rotar 90° a la derecha (.)">Der ↻</button>
         </div>
         <p class="grad-hint" id="select-hint">Marca una zona para limitar dónde pintas (2D y 3D). <strong>Shift</strong> suma · <strong>Ctrl</strong> resta.</p>
       </div>

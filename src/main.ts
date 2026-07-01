@@ -558,6 +558,8 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'enter' && editor.isFloating()) { e.preventDefault(); editor.commitPaste(); }
   else if (k === 'escape') { if (editor.isFloating()) editor.cancelPaste(); else editor.clearSelection(); }
   else if (k === 'delete' || k === 'supr') { e.preventDefault(); if (!editor.isFloating()) deleteLayer(activeId); }
+  else if (k === ',' && editor.isFloating()) { e.preventDefault(); editor.rotateFloat(-1); }   // rotar izquierda
+  else if (k === '.' && editor.isFloating()) { e.preventDefault(); editor.rotateFloat(1); }     // rotar derecha
   else if (k === 'a' && e.shiftKey) {                    // Shift+A: rota el modo de seleccionar
     selectTool('select');
     const i = (SELECT_MODES.indexOf(editor.selectMode) + 1) % SELECT_MODES.length;
@@ -661,6 +663,8 @@ function updateToolUI(tool: Tool) {
   // selección solo aplican a la herramienta seleccionar.
   showEl('select-panel', tool === 'select' || tool === 'move');
   showEl('select-modes', tool === 'select');
+  showEl('move-rotate', tool === 'move');       // rotar solo aplica al flotante de mover
+  showEl('sel-clear', tool !== 'move');         // "Quitar" no aplica en mover (redundante)
   const hint = document.getElementById('select-hint');
   if (hint) hint.innerHTML = tool === 'move'
     ? 'Arrastra la selección (2D o 3D) para moverla. Se suelta en una <strong>capa nueva</strong>. <strong>Ctrl+C/X/V</strong>.'
@@ -691,6 +695,8 @@ document.getElementById('sel-copy')!.addEventListener('click', () => editor.copy
 document.getElementById('sel-cut')!.addEventListener('click', () => editor.cutSelection());
 document.getElementById('sel-paste')!.addEventListener('click', () => editor.isFloating() ? editor.commitPaste() : editor.pasteSelection());
 document.getElementById('sel-clear')!.addEventListener('click', () => editor.clearSelection());
+document.getElementById('sel-rot-l')!.addEventListener('click', () => editor.rotateFloat(-1));
+document.getElementById('sel-rot-r')!.addEventListener('click', () => editor.rotateFloat(1));
 
 // El pegado se confirma en una CAPA NUEVA, en la posición donde se haya soltado.
 editor.onPasteCommit = (img, x, y) => {
@@ -887,10 +893,53 @@ const layersEl = document.getElementById('layers')!;
 
 function activeLayer(): Layer { return layers.find(l => l.id === activeId) ?? layers[0]; }
 
+// Multi-selección de capas (Ctrl/Shift+click) para unirlas. La activa siempre
+// pertenece a la selección.
+let selectedIds = new Set<number>();
+
 function setActive(id: number) {
   activeId = id;
+  selectedIds = new Set([id]);          // clic normal = selección única
   editor.setTarget(activeLayer().canvas);
   renderLayers();
+}
+
+// Clic en la fila de una capa: normal = seleccionar una · Ctrl = añadir/quitar ·
+// Shift = rango desde la activa.
+function onLayerRowClick(id: number, ev: MouseEvent) {
+  if (ev.ctrlKey || ev.metaKey) {
+    const s = new Set(selectedIds); s.add(activeId);
+    if (s.has(id) && id !== activeId) s.delete(id); else s.add(id);
+    activeId = id; selectedIds = s;
+    editor.setTarget(activeLayer().canvas); renderLayers();
+  } else if (ev.shiftKey) {
+    const i0 = layers.findIndex(l => l.id === activeId);
+    const i1 = layers.findIndex(l => l.id === id);
+    const s = new Set<number>();
+    for (let i = Math.min(i0, i1); i <= Math.max(i0, i1); i++) s.add(layers[i].id);
+    activeId = id; selectedIds = s;
+    editor.setTarget(activeLayer().canvas); renderLayers();
+  } else {
+    setActive(id);
+  }
+}
+
+// Une todas las capas seleccionadas en la más baja (respetando su fusión).
+function mergeSelectedLayers() {
+  const idxs = layers.map((l, i) => selectedIds.has(l.id) ? i : -1).filter(i => i >= 0).sort((a, b) => a - b);
+  if (idxs.length < 2) return;
+  pushHistory();
+  const target = layers[idxs[0]];
+  const tctx = target.canvas.getContext('2d')!;
+  for (let k = 1; k < idxs.length; k++) {
+    const l = layers[idxs[k]];
+    if (!l.visible) continue;
+    tctx.save(); tctx.globalCompositeOperation = l.blend; tctx.drawImage(l.canvas, 0, 0); tctx.restore();
+  }
+  for (let k = idxs.length - 1; k >= 1; k--) layers.splice(idxs[k], 1);   // de arriba abajo
+  selectedIds = new Set([target.id]);
+  setActive(target.id);
+  commit();
 }
 
 function renderLayers() {
@@ -900,7 +949,7 @@ function renderLayers() {
     const l = layers[i];
     const isBase = i === 0;
     const row = document.createElement('div');
-    row.className = 'layer-row' + (l.id === activeId ? ' active' : '');
+    row.className = 'layer-row' + (l.id === activeId ? ' active' : (selectedIds.has(l.id) ? ' multi' : ''));
 
     const eye = document.createElement('button');
     eye.className = 'layer-eye' + (l.visible ? '' : ' off');
@@ -928,7 +977,7 @@ function renderLayers() {
     del.addEventListener('click', (ev) => { ev.stopPropagation(); deleteLayer(l.id); });
 
     row.append(eye, name, up, down, del);
-    row.addEventListener('click', () => setActive(l.id));
+    row.addEventListener('click', (ev) => onLayerRowClick(l.id, ev));
     layersEl.appendChild(row);
 
     // Fila de modo de fusión de la capa (la base siempre va normal).
@@ -1006,7 +1055,10 @@ function mergeLayerDown(id: number) {
 
 document.getElementById('layer-add')!.addEventListener('click', addLayer);
 document.getElementById('layer-dup')!.addEventListener('click', () => duplicateLayer(activeId));
-document.getElementById('layer-merge')!.addEventListener('click', () => mergeLayerDown(activeId));
+document.getElementById('layer-merge')!.addEventListener('click', () => {
+  if (selectedIds.size >= 2) mergeSelectedLayers();   // varias seleccionadas → unir en una
+  else mergeLayerDown(activeId);                        // si no, fusionar con la de abajo
+});
 
 // ── Historial global (Ctrl+Z): pintura, capas, selección, etc. ───────────────
 interface Snap {

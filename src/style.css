@@ -309,6 +309,7 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 }
 .layer-row:hover { border-color: #3a3a3e; }
 .layer-row.active { border-color: var(--accent); background: #1e1810; }
+.layer-row.multi { border-color: rgba(244,129,31,0.5); background: rgba(244,129,31,0.08); }
 .layer-eye {
   padding: 0; width: 24px; height: 24px; font-size: 13px;
   background: none; border: none; flex-shrink: 0;
