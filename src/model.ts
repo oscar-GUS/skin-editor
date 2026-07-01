@@ -158,11 +158,12 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     baseMeshes.push(baseMesh);
     disposables.push(baseGeo);
 
-    // Capa externa del MISMO tamaño que la base (no inflada): así las externas de
-    // partes adyacentes (torso/brazos/casco) encajan como las bases y NO se cruzan
-    // en las costuras (lo que causaba el tramado de z-fighting). Se pone delante con
-    // polygonOffset (estilo calcomanía), no con tamaño.
-    const outerGeo = new THREE.BoxGeometry(w, h, d);
+    // Capa externa ligeramente inflada (+0.5 total = 0.25/lado, el "segundo layer"
+    // real de Minecraft) para que se vea separada de la base como antes. El z-fighting
+    // base/externa lo evita el polygonOffset del outerMat (la de delante siempre gana);
+    // el solape entre externas de partes vecinas queda en una franja mínima.
+    const OUTER_EXPAND = 0.5;
+    const outerGeo = new THREE.BoxGeometry(w + OUTER_EXPAND, h + OUTER_EXPAND, d + OUTER_EXPAND);
     applyUV(outerGeo, part.overlay);
     // Material por cara (6 grupos del box, en orden FACE_ORDER) para poder ocultar
     // individualmente las caras de la capa exterior que no tengan contenido.
@@ -179,7 +180,7 @@ export function buildSkinModel(texture: THREE.Texture, slim: boolean, source: HT
     container.add(gridMesh);
     disposables.push(gridGeo);
 
-    const gridOuterGeo = new THREE.BoxGeometry(w + 0.12, h + 0.12, d + 0.12);
+    const gridOuterGeo = new THREE.BoxGeometry(w + OUTER_EXPAND + 0.06, h + OUTER_EXPAND + 0.06, d + OUTER_EXPAND + 0.06);
     applyUV(gridOuterGeo, part.overlay);
     const gridOuterMesh = new THREE.Mesh(gridOuterGeo, gridMat);
     gridOuterMesh.position.set(...local); gridOuterMesh.visible = false; gridOuterMesh.renderOrder = 2;
