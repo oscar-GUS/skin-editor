@@ -646,14 +646,39 @@ export class SkinEditor {
     this.render();
   }
 
+  // Recorta una imagen a los texeles HABILITADOS (partes visibles de la capa activa):
+  // así al pegar/mover no se pinta nada en zonas cuya vista está deshabilitada.
+  private clipImgToRestrict(img: ImageData, x: number, y: number): ImageData {
+    const mask = this.colorRestrict?.() ?? null;
+    if (!mask) return img;
+    const out = new ImageData(new Uint8ClampedArray(img.data), img.width, img.height);
+    for (let j = 0; j < img.height; j++) for (let i = 0; i < img.width; i++) {
+      const gx = x + i, gy = y + j;
+      if (!(gx >= 0 && gy >= 0 && gx < TEX && gy < TEX && mask[gy * TEX + gx] === 1)) {
+        out.data[(j * img.width + i) * 4 + 3] = 0;   // fuera de zona habilitada → nada
+      }
+    }
+    return out;
+  }
+
+  // Vuelca una imagen recortada sobre la capa activa por composición (solo píxeles
+  // opacos), sin borrar lo que haya debajo fuera de la imagen.
+  private stampImg(img: ImageData, x: number, y: number) {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    c.getContext('2d')!.putImageData(img, 0, 0);
+    this.tctx.drawImage(c, x, y);
+  }
+
   // Confirma el pegado: lo vuelca en una capa nueva (si main lo gestiona) o en la
   // capa activa, en la posición actual del flotante.
   commitPaste() {
     if (!this.floating) return;
     const f = this.floating;
     this.floating = null; this.floatGrab = null;
-    if (this.onPasteCommit) this.onPasteCommit(f.img, f.x, f.y);
-    else { this.pushUndo(); this.tctx.putImageData(f.img, f.x, f.y); this.onChange(); }
+    const img = this.clipImgToRestrict(f.img, f.x, f.y);
+    if (this.onPasteCommit) this.onPasteCommit(img, f.x, f.y);
+    else { this.pushUndo(); this.stampImg(img, f.x, f.y); this.onChange(); }
     if (!this.hasSelection()) this.stopAnts();
     this.render();
   }
@@ -737,9 +762,10 @@ export class SkinEditor {
     const f = this.floating;
     this.floating = null; this.floatGrab = null; this.floatingIsMove = false;
     // Se suelta en una CAPA NUEVA (no destructivo): no borra la textura que haya
-    // debajo en el destino. Si main no lo gestiona, cae a la capa activa.
-    if (this.onMoveCommit) this.onMoveCommit(f.img, f.x, f.y);
-    else this.tctx.drawImage(f.canvas, f.x, f.y);
+    // debajo en el destino. Recortado a zonas habilitadas (no pega en partes ocultas).
+    const img = this.clipImgToRestrict(f.img, f.x, f.y);
+    if (this.onMoveCommit) this.onMoveCommit(img, f.x, f.y);
+    else this.stampImg(img, f.x, f.y);
     this.onChange();
     this.commitSelection();
   }

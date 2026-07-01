@@ -310,6 +310,15 @@ button.primary:hover { background: var(--accent-hover); border-color: var(--acce
 .layer-row:hover { border-color: #3a3a3e; }
 .layer-row.active { border-color: var(--accent); background: #1e1810; }
 .layer-row.multi { border-color: rgba(244,129,31,0.5); background: rgba(244,129,31,0.08); }
+.layer-row.in-group { margin-left: 14px; }
+.layer-blend.in-group { margin-left: 14px; }
+/* Cabecera de carpeta (grupo de capas) */
+.group-row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 7px; border-radius: var(--radius-sm);
+  border: 1px solid #2f2a22; background: #17151140;
+}
+.group-row .layer-name { flex: 1; font-size: 12px; font-weight: 600; color: var(--text-sec); }
 .layer-eye {
   padding: 0; width: 24px; height: 24px; font-size: 13px;
   background: none; border: none; flex-shrink: 0;
